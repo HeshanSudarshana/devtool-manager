@@ -1,0 +1,201 @@
+#!/usr/bin/env bash
+
+# DevTool Manager (dtm) - Manage development tools like JDK, Maven, Gradle, Go
+# Usage: 
+#   dtm pull <tool> <version>  - Download and install a tool version
+#   dtm set <tool> <version>   - Set PATH and environment variables for a tool version
+#   dtm list <tool>            - List installed versions
+#   dtm remove <tool> <version> - Remove an installed version
+
+set -e
+
+# Configuration
+DTM_ROOT="${HOME}/development/devtools"
+DTM_CONFIG="${HOME}/.dtmrc"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Logging functions
+log_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+log_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+log_warn() {
+    echo -e "${YELLOW}[WARN]${NC} $1"
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# Show usage
+show_usage() {
+    cat << EOF
+DevTool Manager (dtm) - Manage development tools
+
+Usage:
+  dtm pull <tool> <version>       Download and install a tool version
+  dtm set <tool> <version>        Set PATH and environment for a tool
+  dtm list <tool>                 List installed versions
+  dtm remove <tool> <version>     Remove an installed version
+
+Supported tools:
+  java    - JDK from Eclipse Temurin
+  maven   - Apache Maven
+  gradle  - Gradle Build Tool
+  go      - Go Programming Language
+  node    - Node.js (via nvm)
+  python  - Python (via pyenv)
+
+Examples:
+  dtm pull java 11              Pull latest Java 11
+  dtm pull java 11.0.29         Pull specific Java 11.0.29
+  dtm set java 11               Set Java 11 as active
+  dtm list java                 List installed Java versions
+EOF
+}
+
+# Detect OS and architecture
+detect_platform() {
+    local os=$(uname -s | tr '[:upper:]' '[:lower:]')
+    local arch=$(uname -m)
+    
+    case "$os" in
+        linux*) OS="linux" ;;
+        darwin*) OS="mac" ;;
+        *) log_error "Unsupported OS: $os"; exit 1 ;;
+    esac
+    
+    case "$arch" in
+        x86_64|amd64) ARCH="x64" ;;
+        aarch64|arm64) ARCH="aarch64" ;;
+        *) log_error "Unsupported architecture: $arch"; exit 1 ;;
+    esac
+}
+
+# Source the tool-specific modules
+source_modules() {
+    # Resolve symlink to get actual script location
+    local script_path="${BASH_SOURCE[0]}"
+    while [ -L "$script_path" ]; do
+        script_path="$(readlink "$script_path")"
+    done
+    local script_dir="$(cd "$(dirname "$script_path")" && pwd)"
+    
+    if [[ -f "${script_dir}/modules/java.sh" ]]; then
+        source "${script_dir}/modules/java.sh"
+    fi
+    
+    if [[ -f "${script_dir}/modules/maven.sh" ]]; then
+        source "${script_dir}/modules/maven.sh"
+    fi
+    
+    if [[ -f "${script_dir}/modules/gradle.sh" ]]; then
+        source "${script_dir}/modules/gradle.sh"
+    fi
+    
+    if [[ -f "${script_dir}/modules/go.sh" ]]; then
+        source "${script_dir}/modules/go.sh"
+    fi
+    
+    if [[ -f "${script_dir}/modules/node.sh" ]]; then
+        source "${script_dir}/modules/node.sh"
+    fi
+    
+    if [[ -f "${script_dir}/modules/python.sh" ]]; then
+        source "${script_dir}/modules/python.sh"
+    fi
+}
+
+# Main command dispatcher
+main() {
+    if [[ $# -lt 2 ]]; then
+        show_usage
+        exit 1
+    fi
+    
+    local command="$1"
+    local tool="$2"
+    local version="$3"
+    
+    detect_platform
+    source_modules
+    
+    case "$command" in
+        pull)
+            if [[ -z "$version" ]]; then
+                log_error "Version is required for pull command"
+                exit 1
+            fi
+            
+            case "$tool" in
+                java) pull_java "$version" ;;
+                maven) pull_maven "$version" ;;
+                gradle) pull_gradle "$version" ;;
+                go) pull_go "$version" ;;
+                node) pull_node "$version" ;;
+                python) pull_python "$version" ;;
+                *) log_error "Unknown tool: $tool"; exit 1 ;;
+            esac
+            ;;
+        set)
+            if [[ -z "$version" ]]; then
+                log_error "Version is required for set command"
+                exit 1
+            fi
+            
+            case "$tool" in
+                java) set_java "$version" ;;
+                maven) set_maven "$version" ;;
+                gradle) set_gradle "$version" ;;
+                go) set_go "$version" ;;
+                node) set_node "$version" ;;
+                python) set_python "$version" ;;
+                *) log_error "Unknown tool: $tool"; exit 1 ;;
+            esac
+            ;;
+        list)
+            case "$tool" in
+                java) list_java ;;
+                maven) list_maven ;;
+                gradle) list_gradle ;;
+                go) list_go ;;
+                node) list_node ;;
+                python) list_python ;;
+                *) log_error "Unknown tool: $tool"; exit 1 ;;
+            esac
+            ;;
+        remove)
+            if [[ -z "$version" ]]; then
+                log_error "Version is required for remove command"
+                exit 1
+            fi
+            
+            case "$tool" in
+                java) remove_java "$version" ;;
+                maven) remove_maven "$version" ;;
+                gradle) remove_gradle "$version" ;;
+                go) remove_go "$version" ;;
+                node) remove_node "$version" ;;
+                python) remove_python "$version" ;;
+                *) log_error "Unknown tool: $tool"; exit 1 ;;
+            esac
+            ;;
+        *)
+            log_error "Unknown command: $command"
+            show_usage
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
