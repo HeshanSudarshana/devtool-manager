@@ -412,4 +412,4 @@ The modular structure makes it easy to add support for more tools. Each tool has
 
 ## License
 
-MIT
+Apache License 2.0
