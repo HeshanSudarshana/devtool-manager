@@ -22,26 +22,32 @@ ln -s "${SCRIPT_DIR}/dtm" "${INSTALL_DIR}/dtm"
 
 echo "✓ dtm installed to ${INSTALL_DIR}/dtm"
 
+# Detect active/default shell and choose the right rc file (before PATH/rc messages)
+# Use $SHELL (login shell) or fall back to getent; script may be run with bash even when user uses zsh
+ACTIVE_SHELL="${SHELL##*/}"
+if [ -z "$ACTIVE_SHELL" ]; then
+    ACTIVE_SHELL="$(getent passwd "$(whoami)" 2>/dev/null | cut -d: -f7)"
+    ACTIVE_SHELL="${ACTIVE_SHELL##*/}"
+fi
+case "$ACTIVE_SHELL" in
+    zsh)  SHELL_RC="${HOME}/.zshrc" ;;
+    bash) SHELL_RC="${HOME}/.bashrc" ;;
+    ksh)  SHELL_RC="${HOME}/.kshrc" ;;
+    fish) SHELL_RC="${HOME}/.config/fish/config.fish" ;;
+    *)
+        SHELL_RC="${HOME}/.bashrc"
+        echo "Note: Unknown shell '$ACTIVE_SHELL', defaulting to ~/.bashrc"
+        ;;
+esac
+
 # Check if ~/.local/bin is in PATH
 if [[ ":$PATH:" != *":${INSTALL_DIR}:"* ]]; then
     echo ""
     echo "Warning: ${INSTALL_DIR} is not in your PATH"
-    echo "Add this to your ~/.bashrc or ~/.zshrc:"
+    echo "Add this to your $SHELL_RC:"
     echo ""
     echo "  export PATH=\"${INSTALL_DIR}:\$PATH\""
     echo ""
-fi
-
-# Check if .dtmrc is sourced
-SHELL_RC="${HOME}/.bashrc"
-if [ -n "$ZSH_VERSION" ]; then
-    SHELL_RC="${HOME}/.zshrc"
-fi
-
-# Check if .dtmrc is sourced
-SHELL_RC="${HOME}/.bashrc"
-if [ -n "$ZSH_VERSION" ]; then
-    SHELL_RC="${HOME}/.zshrc"
 fi
 
 # Add dtm.sh source to shell config for auto-apply functionality
