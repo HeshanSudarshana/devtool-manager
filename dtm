@@ -1,17 +1,31 @@
 #!/usr/bin/env bash
 
 # DevTool Manager (dtm) - Manage development tools like JDK, Maven, Gradle, Go
-# Usage: 
-#   dtm pull <tool> <version>  - Download and install a tool version
-#   dtm set <tool> <version>   - Set PATH and environment variables for a tool version
-#   dtm list <tool>            - List installed versions
-#   dtm remove <tool> <version> - Remove an installed version
+# Usage:
+#   dtm pull <tool> <version>    - Download and install a tool version
+#   dtm set <tool> <version>     - Set PATH and environment variables for a tool version
+#   dtm list <tool>              - List installed versions
+#   dtm remove <tool> <version>  - Remove an installed version
+#   dtm config home [path]       - Get or set the DTM_HOME directory
 
 set -e
 
 # Configuration
-DTM_ROOT="${HOME}/development/devtools"
+# DTM_HOME can be set via environment variable or will use default
+# Priority: 1. DTM_HOME env var, 2. Value in ~/.dtmconfig, 3. Default
 DTM_CONFIG="${HOME}/.dtmrc"
+DTM_SETTINGS="${HOME}/.dtmconfig"
+
+# Load DTM_HOME from settings file if it exists and DTM_HOME is not set
+if [[ -z "$DTM_HOME" && -f "$DTM_SETTINGS" ]]; then
+    source "$DTM_SETTINGS"
+fi
+
+# Set default if still not set
+DTM_ROOT="${DTM_HOME:-${HOME}/development/devtools}"
+
+# Create DTM_ROOT directory if it doesn't exist
+mkdir -p "$DTM_ROOT"
 
 # Colors for output
 RED='\033[0;31m'
@@ -47,6 +61,7 @@ Usage:
   dtm set <tool> <version>        Set PATH and environment for a tool
   dtm list <tool>                 List installed versions
   dtm remove <tool> <version>     Remove an installed version
+  dtm config home [path]          Get or set the DTM_HOME directory
 
 Supported tools:
   java    - JDK from Eclipse Temurin
@@ -61,6 +76,8 @@ Examples:
   dtm pull java 11.0.29         Pull specific Java 11.0.29
   dtm set java 11               Set Java 11 as active
   dtm list java                 List installed Java versions
+  dtm config home               Show current DTM_HOME path
+  dtm config home /custom/path  Set DTM_HOME to /custom/path
 EOF
 }
 
@@ -68,13 +85,13 @@ EOF
 detect_platform() {
     local os=$(uname -s | tr '[:upper:]' '[:lower:]')
     local arch=$(uname -m)
-    
+
     case "$os" in
         linux*) OS="linux" ;;
         darwin*) OS="mac" ;;
         *) log_error "Unsupported OS: $os"; exit 1 ;;
     esac
-    
+
     case "$arch" in
         x86_64|amd64) ARCH="x64" ;;
         aarch64|arm64) ARCH="aarch64" ;;
@@ -90,53 +107,121 @@ source_modules() {
         script_path="$(readlink "$script_path")"
     done
     local script_dir="$(cd "$(dirname "$script_path")" && pwd)"
-    
+
     if [[ -f "${script_dir}/modules/java.sh" ]]; then
         source "${script_dir}/modules/java.sh"
     fi
-    
+
     if [[ -f "${script_dir}/modules/maven.sh" ]]; then
         source "${script_dir}/modules/maven.sh"
     fi
-    
+
     if [[ -f "${script_dir}/modules/gradle.sh" ]]; then
         source "${script_dir}/modules/gradle.sh"
     fi
-    
+
     if [[ -f "${script_dir}/modules/go.sh" ]]; then
         source "${script_dir}/modules/go.sh"
     fi
-    
+
     if [[ -f "${script_dir}/modules/node.sh" ]]; then
         source "${script_dir}/modules/node.sh"
     fi
-    
+
     if [[ -f "${script_dir}/modules/python.sh" ]]; then
         source "${script_dir}/modules/python.sh"
     fi
 }
 
+# Config command handler
+config_command() {
+    local subcommand="$1"
+    local value="$2"
+
+    case "$subcommand" in
+        home)
+            if [[ -z "$value" ]]; then
+                # Show current DTM_HOME
+                log_info "Current DTM_HOME: $DTM_ROOT"
+                if [[ -n "$DTM_HOME" ]]; then
+                    log_info "  (set via DTM_HOME environment variable)"
+                elif [[ -f "$DTM_SETTINGS" ]]; then
+                    log_info "  (set via $DTM_SETTINGS)"
+                else
+                    log_info "  (using default)"
+                fi
+            else
+                # Set new DTM_HOME
+                local new_path="$value"
+
+                # Expand ~ to home directory
+                new_path="${new_path/#\~/$HOME}"
+
+                # Convert to absolute path
+                new_path=$(realpath -m "$new_path")
+
+                log_info "Setting DTM_HOME to: $new_path"
+
+                # Create the directory if it doesn't exist
+                mkdir -p "$new_path"
+
+                # Save to settings file
+                echo "# DevTool Manager Configuration" > "$DTM_SETTINGS"
+                echo "# This file is sourced by dtm to set configuration" >> "$DTM_SETTINGS"
+                echo "export DTM_HOME=\"$new_path\"" >> "$DTM_SETTINGS"
+
+                log_success "DTM_HOME configured successfully"
+                log_info "Restart your shell or run: source ~/.dtmconfig"
+                log_info "Current session still uses: $DTM_ROOT"
+            fi
+            ;;
+        *)
+            log_error "Unknown config subcommand: $subcommand"
+            echo "Available subcommands: home"
+            exit 1
+            ;;
+    esac
+}
+
 # Main command dispatcher
 main() {
+    if [[ $# -lt 1 ]]; then
+        show_usage
+        exit 1
+    fi
+
+    local command="$1"
+
+    # Handle config command separately (different argument structure)
+    if [[ "$command" == "config" ]]; then
+        if [[ $# -lt 2 ]]; then
+            log_error "Config subcommand required"
+            echo "Available subcommands: home"
+            exit 1
+        fi
+        config_command "$2" "$3"
+        exit 0
+    fi
+
+    # All other commands require at least tool argument
     if [[ $# -lt 2 ]]; then
         show_usage
         exit 1
     fi
-    
-    local command="$1"
+
     local tool="$2"
     local version="$3"
-    
+
     detect_platform
     source_modules
-    
+
     case "$command" in
         pull)
             if [[ -z "$version" ]]; then
                 log_error "Version is required for pull command"
                 exit 1
             fi
-            
+
             case "$tool" in
                 java) pull_java "$version" ;;
                 maven) pull_maven "$version" ;;
@@ -152,7 +237,7 @@ main() {
                 log_error "Version is required for set command"
                 exit 1
             fi
-            
+
             case "$tool" in
                 java) set_java "$version" ;;
                 maven) set_maven "$version" ;;
@@ -179,7 +264,7 @@ main() {
                 log_error "Version is required for remove command"
                 exit 1
             fi
-            
+
             case "$tool" in
                 java) remove_java "$version" ;;
                 maven) remove_maven "$version" ;;

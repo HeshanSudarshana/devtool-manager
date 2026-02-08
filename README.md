@@ -242,10 +242,10 @@ dtm remove python 3.11.7
 
 ## Directory Structure
 
-All tools are installed under `~/development/devtools/`:
+By default, all tools are installed under `~/development/devtools/` (configurable via `DTM_HOME`):
 
 ```
-~/development/devtools/
+~/development/devtools/   (or $DTM_HOME)
 ├── java/
 │   ├── 11.0.21/
 │   ├── 17.0.9/
@@ -269,7 +269,49 @@ All tools are installed under `~/development/devtools/`:
 
 **Node.js** and **Python** are managed via nvm and pyenv respectively, which handle their own directory structures.
 
+To change the installation directory, see the [Configuration](#configuration) section.
+
 ## Configuration
+
+### DTM Home Directory
+
+By default, dtm installs all tools under `~/development/devtools/`. You can customize this location:
+
+**Option 1: Using the config command (recommended)**
+```bash
+# View current DTM_HOME
+dtm config home
+
+# Set custom installation directory
+dtm config home /path/to/your/devtools
+
+# Restart shell or source the config
+source ~/.dtmconfig
+```
+
+**Option 2: Set DTM_HOME environment variable**
+```bash
+# Add to your ~/.bashrc or ~/.zshrc
+export DTM_HOME="/path/to/your/devtools"
+```
+
+**Option 3: Edit ~/.dtmconfig directly**
+```bash
+# Create or edit ~/.dtmconfig
+echo 'export DTM_HOME="/path/to/your/devtools"' > ~/.dtmconfig
+
+# Source it in your shell config
+echo 'source ~/.dtmconfig' >> ~/.bashrc  # or ~/.zshrc
+```
+
+**Priority order:**
+1. `DTM_HOME` environment variable (highest priority)
+2. `DTM_HOME` value in `~/.dtmconfig`
+3. Default: `~/development/devtools` (lowest priority)
+
+📖 **For detailed configuration guide with examples, see [DTM_HOME_CONFIGURATION.md](DTM_HOME_CONFIGURATION.md)**
+
+### Tool Configuration
 
 The tool creates a configuration file at `~/.dtmrc` which contains environment variables for the active tool versions. This file is updated by the `dtm set` command.
 

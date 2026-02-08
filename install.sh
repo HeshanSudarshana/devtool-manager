@@ -74,6 +74,28 @@ if ! grep -q "source.*\.dtmrc" "$SHELL_RC" 2>/dev/null; then
     echo ""
 fi
 
+if ! grep -q "source.*\.dtmconfig" "$SHELL_RC" 2>/dev/null; then
+    echo ""
+    echo "Note: Add this to your $SHELL_RC to load DTM_HOME configuration:"
+    echo ""
+    echo "  # Load dtm home configuration"
+    echo "  if [ -f ~/.dtmconfig ]; then"
+    echo "      source ~/.dtmconfig"
+    echo "  fi"
+    echo ""
+fi
+
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  DTM Home Directory"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "By default, dtm installs tools to: ~/development/devtools"
+echo ""
+echo "To customize the installation directory, use:"
+echo "  dtm config home /your/custom/path"
+echo ""
+
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  Optional: Install Node.js and Python managers"
@@ -114,7 +136,7 @@ if ! command -v pyenv &> /dev/null && [ ! -s "$HOME/.pyenv/bin/pyenv" ]; then
         echo "Build tools and libraries are needed to compile Python successfully."
         echo "This may require sudo password."
         echo ""
-        
+
         # Detect OS and install dependencies
         if [[ "$OSTYPE" == "linux-gnu"* ]]; then
             if command -v pacman &> /dev/null; then
@@ -139,7 +161,7 @@ if ! command -v pyenv &> /dev/null && [ ! -s "$HOME/.pyenv/bin/pyenv" ]; then
             echo "On macOS, make sure Xcode Command Line Tools are installed"
             echo "Run: xcode-select --install (if not already installed)"
         fi
-        
+
         # Install pyenv
         if curl https://pyenv.run | bash; then
             echo "✓ pyenv installed successfully"
