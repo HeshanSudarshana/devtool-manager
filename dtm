@@ -459,6 +459,17 @@ source_modules() {
     if [[ -f "${script_dir}/modules/python.sh" ]]; then
         source "${script_dir}/modules/python.sh"
     fi
+
+    # Generic candidate engine + descriptor discovery.
+    if [[ -f "${script_dir}/modules/_engine.sh" ]]; then
+        source "${script_dir}/modules/_engine.sh"
+        local cf cname
+        for cf in "${script_dir}/modules/candidates"/*.conf; do
+            [[ -f "$cf" ]] || continue
+            cname="$(basename "$cf" .conf)"
+            DTM_CANDIDATE_FILES["$cname"]="$cf"
+        done
+    fi
 }
 
 # Doctor command — diagnose dtm environment health.
@@ -1078,6 +1089,14 @@ main() {
             fi
             ;;
     esac
+
+    # Candidate-engine fallthrough: any tool registered via modules/candidates/*.conf
+    # is handled generically. Legacy java/maven/gradle/go/node/python keep their
+    # dedicated modules below.
+    if [[ -n "${DTM_CANDIDATE_FILES[$tool]:-}" ]]; then
+        candidate_dispatch "$command" "$tool" "$version"
+        exit 0
+    fi
 
     case "$command" in
         pull)
