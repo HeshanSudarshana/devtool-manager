@@ -6,15 +6,23 @@
 # Optional: enable .tool-versions auto-switch on cd by exporting before sourcing:
 #   export DTM_AUTO_SWITCH=1
 
+# Resolve dtm binary: env override > PATH lookup > default fallback.
+# `type -P` is used instead of `command -v` so a previously-defined `dtm`
+# shell function (from a prior source of this file) is skipped.
+if [[ -z "${DTM_BIN:-}" ]]; then
+    DTM_BIN="$(type -P dtm 2>/dev/null || true)"
+fi
 DTM_BIN="${DTM_BIN:-${HOME}/.local/bin/dtm}"
 
-# Wrapper function that evals the output of 'dtm set' / 'dtm use' commands
+# Wrapper function that evals the output of 'dtm set' / 'dtm use' commands.
+# Exports DTM_WRAPPED=1 so the binary can detect that its stdout will be
+# eval'd and skip the "wrapper not detected" warning.
 dtm() {
     local subcmd="$1"
 
     if [[ "$subcmd" == "set" || "$subcmd" == "use" || "$subcmd" == "update" ]]; then
         local exports
-        exports=$("$DTM_BIN" "$@")
+        exports=$(DTM_WRAPPED=1 "$DTM_BIN" "$@")
         local exit_code=$?
 
         if [[ $exit_code -eq 0 ]]; then
@@ -99,7 +107,7 @@ _dtm_apply_tool_versions() {
         esac
 
         local exports
-        if exports=$("$DTM_BIN" use "$tool" "$version" 2>/dev/null); then
+        if exports=$(DTM_WRAPPED=1 "$DTM_BIN" use "$tool" "$version" 2>/dev/null); then
             eval "$exports"
             applied+=("${tool}@${version}")
         fi

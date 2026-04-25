@@ -977,6 +977,23 @@ main() {
     detect_platform
     source_modules
 
+    # Warn when set/use/update is invoked outside the dtm.sh wrapper. These
+    # commands emit `export ...` lines on stdout that the wrapper eval's into
+    # the parent shell. Without the wrapper, the user sees the lines but PATH
+    # never changes — looks successful, isn't. The wrapper sets DTM_WRAPPED=1
+    # before invoking us, so its absence + a TTY stdout (i.e. user is reading
+    # the output, not piping it into eval) is the misuse signal. The warning
+    # goes to stderr so it never breaks intentional `eval "$(dtm set ...)"`.
+    case "$command" in
+        set|use|update)
+            if [[ -z "${DTM_WRAPPED:-}" && -t 1 ]]; then
+                log_warn "dtm.sh wrapper not detected — exports printed below will not"
+                log_warn "be applied to your shell. Either source dtm.sh from your shell"
+                log_warn "rc, or run: eval \"\$(dtm $command $tool${version:+ $version})\""
+            fi
+            ;;
+    esac
+
     case "$command" in
         pull)
             if [[ -z "$version" ]]; then
