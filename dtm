@@ -643,6 +643,68 @@ doctor_command() {
         log_success "  none"
     fi
 
+    log_info "[migration] checking for legacy nvm/pyenv installs..."
+    local nvm_dir="${NVM_DIR:-${HOME}/.nvm}/versions/node"
+    local pyenv_dir="${PYENV_ROOT:-${HOME}/.pyenv}/versions"
+    local -a nvm_versions=() pyenv_versions=()
+    local mv mclean
+    if [[ -d "$nvm_dir" ]]; then
+        for mv in "$nvm_dir"/*; do
+            [[ -d "$mv" ]] || continue
+            nvm_versions+=("$(basename "$mv")")
+        done
+    fi
+    if [[ -d "$pyenv_dir" ]]; then
+        for mv in "$pyenv_dir"/*; do
+            [[ -d "$mv" ]] || continue
+            mclean="$(basename "$mv")"
+            [[ "$mclean" == "system" ]] && continue
+            pyenv_versions+=("$mclean")
+        done
+    fi
+    if (( ${#nvm_versions[@]} == 0 && ${#pyenv_versions[@]} == 0 )); then
+        log_success "  none detected"
+    fi
+    if (( ${#nvm_versions[@]} > 0 )); then
+        log_warn "  nvm: $nvm_dir (${#nvm_versions[@]} version(s))"
+        warnings=$((warnings+1))
+        for mv in "${nvm_versions[@]}"; do
+            mclean="${mv#v}"
+            log_warn "    $mv  ->  dtm pull node $mclean"
+        done
+        _doctor_problem warn "legacy nvm installs at $nvm_dir; reinstall via 'dtm pull node <version>'"
+    fi
+    if (( ${#pyenv_versions[@]} > 0 )); then
+        log_warn "  pyenv: $pyenv_dir (${#pyenv_versions[@]} version(s))"
+        warnings=$((warnings+1))
+        for mv in "${pyenv_versions[@]}"; do
+            if [[ "$mv" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+                log_warn "    $mv  ->  dtm pull python $mv"
+            else
+                log_warn "    $mv  (skip: dtm only ships CPython via python-build-standalone)"
+            fi
+        done
+        _doctor_problem warn "legacy pyenv installs at $pyenv_dir; reinstall CPython versions via 'dtm pull python <version>'"
+    fi
+
+    local migration_json
+    if [[ -n "$DTM_OUTPUT_JSON" ]]; then
+        local nvm_arr="[]" pyenv_arr="[]"
+        if (( ${#nvm_versions[@]} > 0 )); then
+            nvm_arr=$(printf '%s\n' "${nvm_versions[@]}" | jq -R . | jq -s .)
+        fi
+        if (( ${#pyenv_versions[@]} > 0 )); then
+            pyenv_arr=$(printf '%s\n' "${pyenv_versions[@]}" | jq -R . | jq -s .)
+        fi
+        migration_json=$(jq -nc \
+            --arg nvm_path "$nvm_dir" \
+            --arg pyenv_path "$pyenv_dir" \
+            --argjson nvm_versions "$nvm_arr" \
+            --argjson pyenv_versions "$pyenv_arr" \
+            '{nvm:   {path:$nvm_path,   detected:($nvm_versions   | length > 0), versions:$nvm_versions},
+              pyenv: {path:$pyenv_path, detected:($pyenv_versions | length > 0), versions:$pyenv_versions}}')
+    fi
+
     log_info "[network] proxy + mirror configuration"
     local proxy_https="${HTTPS_PROXY:-${https_proxy:-}}"
     local proxy_http="${HTTP_PROXY:-${http_proxy:-}}"
@@ -726,11 +788,12 @@ doctor_command() {
             --argjson tools "$tools_json" \
             --argjson problems "$problems_json" \
             --argjson network "$network_json" \
+            --argjson migration "$migration_json" \
             --arg dtm_home "$DTM_ROOT" \
             --arg dtmrc "$DTM_CONFIG" \
             '{ok: ($errors == 0), errors:$errors, warnings:$warnings,
               dtm_home:$dtm_home, dtmrc:$dtmrc, tools:$tools,
-              network:$network, problems:$problems}'
+              network:$network, migration:$migration, problems:$problems}'
         if (( issues > 0 )); then exit 1; fi
         return 0
     fi

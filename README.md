@@ -9,7 +9,7 @@ A command-line tool to manage development tools like JDK, Maven, Gradle, Go, Nod
 - **Use**: Activate a version for the current shell only (no persistence)
 - **List**: View all installed versions
 - **Current**: Show the active version of a tool
-- **Available**: Query the upstream registry for installable versions (java/maven/gradle/go)
+- **Available**: Query the upstream registry for installable versions (all tools)
 - **Remove**: Uninstall specific versions
 - **`.tool-versions` auto-switch**: asdf-style per-project version pinning with optional auto-apply on `cd`
 
@@ -19,8 +19,8 @@ A command-line tool to manage development tools like JDK, Maven, Gradle, Go, Nod
 - **Maven** - Apache Maven (native implementation)
 - **Gradle** - Gradle Build Tool (native implementation)
 - **Go** - Go Programming Language (native implementation with separate GOPATH per version)
-- **Node.js** - Wraps nvm for full Node.js management
-- **Python** - Wraps pyenv for full Python management
+- **Node.js** - Prebuilt tarballs from nodejs.org (sha256 verified, LTS-aware)
+- **Python** - Prebuilt CPython from `astral-sh/python-build-standalone` (sha256 verified)
 
 ## Installation
 
@@ -35,8 +35,7 @@ cd /home/heshan/development/devtools/devtool-manager
 The installer will:
 - ✅ Install dtm to `~/.local/bin/dtm`
 - ✅ Set up auto-apply wrapper (dtm.sh) in your shell config
-- ✅ **Optionally install nvm** (interactive prompt)
-- ✅ **Optionally install pyenv** (interactive prompt)
+- ✅ Install shell completion (bash / zsh / fish)
 
 3. **Restart your shell or run:**
 
@@ -171,15 +170,16 @@ dtm list go
 dtm remove go 1.20.11
 ```
 
-### Node.js (via nvm)
+### Node.js Management
 
-dtm wraps nvm to provide a consistent interface while leveraging nvm's power:
+Native — pulls prebuilt tarballs from `nodejs.org/dist`, verified against the
+release `SHASUMS256.txt`. No nvm dependency.
 
 ```bash
 # Pull (install) Node.js versions
 dtm pull node 20          # Install latest Node 20.x
 dtm pull node 18.19.0     # Install specific version
-dtm pull node --lts       # Install latest LTS
+dtm pull node lts         # Install latest LTS
 
 # Set active version (auto-applies to shell)
 dtm set node 20
@@ -187,73 +187,58 @@ dtm set node 20
 # List installed versions
 dtm list node
 
+# Query upstream for installable versions
+dtm available node        # Majors with LTS marker
+dtm available node 22     # All 22.x patches
+
 # Remove a version
 dtm remove node 18.19.0
 ```
 
-**Requirements:** nvm is required.
-- ✅ **Auto-install**: When you first use `dtm pull node`, it will offer to install nvm for you
-- ✅ **Or install manually**:
-  ```bash
-  curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/master/install.sh | bash
-  ```
+Sets `NODE_HOME` and prepends `$NODE_HOME/bin` to `PATH`. Tarballs land in
+`$DTM_HOME/node/<version>/`.
 
-**Benefits:**
-- Uses nvm under the hood - all nvm features available
-- Consistent dtm interface across all tools
-- Auto-applies version changes to current shell
-- Can still use `nvm` commands directly
+### Python Management
 
-### Python (via pyenv)
-
-dtm wraps pyenv to provide a consistent interface while leveraging pyenv's power:
+Native — pulls prebuilt CPython from
+[`astral-sh/python-build-standalone`](https://github.com/astral-sh/python-build-standalone)
+releases (the same source `uv` and `mise` use). Sha256 verified. No source
+build, no compilers, no `sudo`.
 
 ```bash
 # Pull (install) Python versions
-dtm pull python 3.12.1    # Install Python 3.12.1
-dtm pull python 3.11.7    # Install Python 3.11.7
+dtm pull python 3.12      # Latest 3.12.x in newest PBS release
+dtm pull python 3.12.7    # Specific patch (must exist in a PBS release)
 
 # Set active version (auto-applies to shell)
-dtm set python 3.12.1
+dtm set python 3.12.7
 
 # List installed versions
 dtm list python
+
+# Query upstream for installable versions
+dtm available python      # All CPython versions in the latest PBS release
+dtm available python 3.13 # Filter to a series
 
 # Remove a version
 dtm remove python 3.11.7
 ```
 
-**Requirements:** pyenv is required.
-- ✅ **Auto-install**: When you first use `dtm pull python`, it will offer to install pyenv and build dependencies for you
-  - **Note:** Unlike Node.js (pre-built binaries), Python must be compiled from source
-  - Build dependencies will be automatically installed for:
-    - **Arch Linux** (pacman: base-devel, openssl, zlib, xz, tk)
-    - **Debian/Ubuntu** (apt-get: build-essential, libssl-dev, zlib1g-dev, etc.)
-    - **RHEL/Fedora/CentOS** (yum: gcc, zlib-devel, openssl-devel, etc.)
-    - **macOS** (requires Xcode Command Line Tools)
-- ✅ **Or install manually**:
-  ```bash
-  curl https://pyenv.run | bash
-  ```
-  
-  Then add to your `~/.bashrc` or `~/.zshrc`:
-  ```bash
-  export PYENV_ROOT="$HOME/.pyenv"
-  export PATH="$PYENV_ROOT/bin:$PATH"
-  eval "$(pyenv init -)"
-  ```
+Sets `PYTHON_HOME` and prepends `$PYTHON_HOME/bin` to `PATH`. Tarballs land in
+`$DTM_HOME/python/<version>/`.
 
-**Benefits:**
-- Uses pyenv under the hood - all pyenv features available
-- Consistent dtm interface across all tools
-- Auto-applies version changes to current shell
-- Can still use `pyenv` commands directly
-- See available versions: `pyenv install --list`
+> **Version coverage diverges from pyenv.** PBS ships official CPython
+> releases only — no PyPy, no anaconda, no source builds. If `dtm available
+> python` doesn't show a version, it's not in a PBS release.
+
+Migrating from nvm/pyenv? Run `dtm doctor` — the `[migration]` section
+detects existing `~/.nvm` / `~/.pyenv` installs and prints the corresponding
+`dtm pull` commands for each.
 
 ### `set` vs `use`
 
-- `dtm set <tool> <version>` — writes the activation to `~/.dtmrc` so new shells inherit it (and applies it to the current shell). For Python it also runs `pyenv global`.
-- `dtm use <tool> <version>` — applies only to the current shell. Nothing is persisted to `~/.dtmrc`. For Python this uses `pyenv shell` instead of `pyenv global` so other shells are unaffected.
+- `dtm set <tool> <version>` — writes the activation to `~/.dtmrc` so new shells inherit it (and applies it to the current shell).
+- `dtm use <tool> <version>` — applies only to the current shell. Nothing is persisted to `~/.dtmrc`.
 
 ```bash
 # global (default, persists)
@@ -274,7 +259,7 @@ node 20
 python 3.12.1
 ```
 
-Lines starting with `#` are comments. asdf aliases (`nodejs`, `golang`) are also recognized.
+Lines starting with `#` are comments. asdf aliases (`nodejs`, `golang`) are recognized.
 
 Apply manually from any directory inside the project:
 
@@ -295,7 +280,7 @@ When enabled, dtm walks up from the current directory whenever the prompt is sho
 
 ### Listing available (installable) versions
 
-Query the upstream registry for versions you could install. Supported for `java`, `maven`, `gradle`, and `go`. For `node` and `python`, use `nvm ls-remote` and `pyenv install --list` directly.
+Query the upstream registry for versions you could install. Supported for all tools (`java`, `maven`, `gradle`, `go`, `node`, `python`).
 
 ```bash
 # Java major releases on Temurin (default; LTS marked)
@@ -310,15 +295,19 @@ dtm available java zulu@21       # Zulu 21 patches
 dtm available java liberica@17   # Liberica 17 patches
 dtm available java corretto      # Corretto-supported majors
 
-# Recent Maven / Gradle / Go releases
+# Recent Maven / Gradle / Go / Node / Python releases
 dtm available maven
 dtm available gradle
 dtm available go
+dtm available node               # Majors with LTS marker
+dtm available python             # CPython versions in the latest PBS release
 
 # Filter by prefix
 dtm available maven 3.9
 dtm available gradle 8
 dtm available go 1.22
+dtm available node 22
+dtm available python 3.13
 ```
 
 ## Directory Structure
@@ -340,15 +329,19 @@ By default, all tools are installed under `~/development/devtools/` (configurabl
 ├── go/
 │   ├── 1.21.5/
 │   └── ...
-└── go-workspaces/
-    ├── 1.21.5/
-    │   ├── src/
-    │   ├── pkg/
-    │   └── bin/
+├── go-workspaces/
+│   ├── 1.21.5/
+│   │   ├── src/
+│   │   ├── pkg/
+│   │   └── bin/
+│   └── ...
+├── node/
+│   ├── 20.18.0/
+│   └── ...
+└── python/
+    ├── 3.12.7/
     └── ...
 ```
-
-**Node.js** and **Python** are managed via nvm and pyenv respectively, which handle their own directory structures.
 
 To change the installation directory, see the [Configuration](#configuration) section.
 
@@ -390,8 +383,6 @@ echo 'source ~/.dtmconfig' >> ~/.bashrc  # or ~/.zshrc
 2. `DTM_HOME` value in `~/.dtmconfig`
 3. Default: `~/development/devtools` (lowest priority)
 
-📖 **For detailed configuration guide with examples, see [DTM_HOME_CONFIGURATION.md](DTM_HOME_CONFIGURATION.md)**
-
 ### Tool Configuration
 
 The tool creates a configuration file at `~/.dtmrc` which contains environment variables for the active tool versions. This file is updated by the `dtm set` command.
@@ -422,6 +413,10 @@ caches, Adoptium / Maven / Gradle / Go mirrors) via these env vars:
 | `DTM_GRADLE_DIST`  | `https://services.gradle.org`              | `dtm pull/available gradle` |
 | `DTM_GO_DIST`      | `https://go.dev`                           | `dtm pull/available go` |
 | `DTM_GO_CHECKSUM`  | `https://dl.google.com/go`                 | `dtm pull go` (sha256 sidecars) |
+| `DTM_NODE_DIST`    | `https://nodejs.org/dist`                  | `dtm pull/available node` (tarballs + SHASUMS256.txt) |
+| `DTM_PBS_REPO`     | `https://api.github.com/repos/astral-sh/python-build-standalone` | `dtm available python` (release listing) |
+| `DTM_PBS_DIST`     | `https://github.com/astral-sh/python-build-standalone/releases/download` | `dtm pull python` (tarballs + sha256) |
+| `DTM_PBS_LATEST`   | `https://raw.githubusercontent.com/astral-sh/python-build-standalone/latest-release/latest-release.json` | `dtm pull/available python` (resolve latest tag) |
 
 Persist them by adding to `~/.dtmconfig`:
 
@@ -445,13 +440,9 @@ machine-readable form).
 
 - Bash 4.0 or later
 - curl
+- jq (JSON parsing)
 - tar (and unzip for Gradle)
-- Python 3 (for JSON parsing)
 - Linux or macOS
-  - **Arch Linux** (pacman)
-  - **Debian/Ubuntu** (apt-get)
-  - **RHEL/Fedora/CentOS** (yum/dnf)
-  - **macOS** (homebrew recommended for dependencies)
 
 ## How It Works
 
@@ -525,10 +516,14 @@ echo $GOROOT  # ~/development/devtools/go/1.21.x
 echo $GOPATH  # ~/development/devtools/go-workspaces/1.21.x
 ```
 
-### Node.js (via nvm)
+### Node.js
 ```bash
-# Install Node 20
+# Install latest LTS
+dtm pull node lts
+
+# Or a specific major / patch
 dtm pull node 20
+dtm pull node 20.18.0
 
 # Activate it
 dtm set node 20
@@ -536,27 +531,22 @@ dtm set node 20
 # Verify
 node --version
 npm --version
-
-# All nvm commands still work
-nvm install --lts
-nvm use 18
 ```
 
-### Python (via pyenv)
+### Python
 ```bash
-# Install Python 3.12
-dtm pull python 3.12.1
+# Install latest 3.12.x in the newest python-build-standalone release
+dtm pull python 3.12
+
+# Or a specific patch
+dtm pull python 3.12.7
 
 # Activate it
-dtm set python 3.12.1
+dtm set python 3.12.7
 
 # Verify
-python --version
-pip --version
-
-# All pyenv commands still work
-pyenv install 3.11.7
-pyenv global 3.11.7
+python3 --version
+pip3 --version
 ```
 
 ### Unified Management
@@ -565,7 +555,7 @@ pyenv global 3.11.7
 dtm set java 17
 dtm set go 1.21
 dtm set node 20
-dtm set python 3.12.1
+dtm set python 3.12.7
 dtm set maven 3.9.6
 dtm set gradle 8.5
 
