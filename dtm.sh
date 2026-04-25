@@ -101,11 +101,8 @@ _dtm_apply_tool_versions() {
             golang) tool=go ;;
         esac
 
-        case "$tool" in
-            java|maven|gradle|go|node|python) ;;
-            *) continue ;;
-        esac
-
+        # Try to activate via dtm. Tools dtm doesn't recognise simply fail
+        # silently — no need to maintain a parallel allowlist here.
         local exports
         if exports=$(DTM_WRAPPED=1 "$DTM_BIN" use "$tool" "$version" 2>/dev/null); then
             eval "$exports"

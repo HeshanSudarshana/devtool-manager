@@ -46,7 +46,12 @@ _dtm() {
     }
 
     local commands="pull set use list current available update remove doctor self-update uninstall config"
-    local tools="java maven gradle go node python"
+    # Pull the live tool list from dtm so newly-added candidate descriptors
+    # show up without editing this file. Fall back to the legacy modules if
+    # dtm isn't on PATH yet (e.g. during install).
+    local tools
+    tools=$(command dtm tools 2>/dev/null | tr '\n' ' ')
+    [[ -z "$tools" ]] && tools="java node python"
     local versioned_cmds="pull set use remove"
     local tool_only_cmds="list current available update"
 

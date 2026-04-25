@@ -55,7 +55,10 @@ _dtm() {
         'uninstall:Remove dtm itself (symlink, hooks, config)'
         'config:Get or set dtm configuration'
     )
-    tools=(java maven gradle go node python)
+    # Pull the live tool list from dtm so candidate descriptors show up
+    # without editing this file.
+    tools=( ${(f)"$(command dtm tools 2>/dev/null)"} )
+    (( ${#tools} )) || tools=(java node python)
 
     local context state line
     typeset -A opt_args

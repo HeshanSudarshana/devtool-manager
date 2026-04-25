@@ -29,11 +29,18 @@
 #                           grep by basename of download_url).
 #   os_linux, os_mac        Per-candidate alias for ${OS}. Defaults to dtm's OS (linux|mac).
 #   arch_x64, arch_aarch64  Per-candidate alias for ${ARCH}. Defaults to dtm's ARCH (x64|aarch64).
-#   version_strategy        Named strategy: github_releases | hashicorp_releases.
-#   version_strategy_arg    Strategy-specific arg (e.g. "owner/repo", "terraform").
+#   version_strategy        Named strategy: github_releases | hashicorp_releases |
+#                           maven_central | gradle_versions | go_dl.
+#   version_strategy_arg    Strategy-specific arg (e.g. "owner/repo", "terraform",
+#                           Maven artifact path).
 #   version_filter          Regex applied to listed versions.
-#   version_tag_prefix      Prefix stripped from upstream tag names (e.g. v).
+#   version_tag_prefix      Prefix stripped from upstream tag names (e.g. v, go).
 #   post_install_fn         Optional shell function called as: <fn> <install_dir> <version>.
+#   workspace_var           Optional secondary env var (e.g. GOPATH) pointing at a
+#                           per-version sibling dir under DTM_ROOT/<workspace_subdir>/<version>.
+#   workspace_subdir        Sibling dir name under DTM_ROOT (e.g. go-workspaces).
+#   workspace_bin           Subdir of the workspace to prepend after bin_subdir on PATH (e.g. bin).
+#   workspace_init          Comma-separated subdirs to create on pull (e.g. "src,pkg,bin").
 
 # Registry of discovered descriptor files: name -> absolute path.
 declare -gA DTM_CANDIDATE_FILES
@@ -63,6 +70,10 @@ candidate_reset() {
     candidate_version_filter=""
     candidate_version_tag_prefix=""
     candidate_post_install_fn=""
+    candidate_workspace_var=""
+    candidate_workspace_subdir=""
+    candidate_workspace_bin=""
+    candidate_workspace_init=""
 }
 
 # Load a descriptor file. Sets candidate_* variables.
@@ -101,7 +112,9 @@ candidate_root() {
 
 # Substitute ${VERSION}, ${OS}, ${ARCH} in a URL template. OS/ARCH are mapped
 # through per-candidate aliases (candidate_os_<dtm_os>, candidate_arch_<dtm_arch>).
-# OS and ARCH globals are populated by detect_platform() in dtm.
+# OS and ARCH globals are populated by detect_platform() in dtm. Any remaining
+# ${VAR} references (e.g. ${DTM_MAVEN_DIST}) are expanded from the environment;
+# a missing var aborts so descriptors fail loudly instead of producing broken URLs.
 candidate_render_url() {
     local template="$1" version="$2"
     local os_key="candidate_os_${OS}" arch_key="candidate_arch_${ARCH}"
@@ -109,23 +122,68 @@ candidate_render_url() {
     local out="${template//\$\{VERSION\}/$version}"
     out="${out//\$\{OS\}/$os_val}"
     out="${out//\$\{ARCH\}/$arch_val}"
+    while [[ "$out" =~ \$\{([A-Z_][A-Z0-9_]*)\} ]]; do
+        local var="${BASH_REMATCH[1]}"
+        local val="${!var-}"
+        if [[ -z "${!var+x}" ]]; then
+            log_error "URL template references undefined env var: \${$var}" >&2
+            return 1
+        fi
+        out="${out//\$\{$var\}/$val}"
+    done
     echo "$out"
 }
 
 # Emit `export` lines for the active install. Goes to stdout so the dtm.sh
-# wrapper can eval it into the parent shell.
+# wrapper can eval it into the parent shell. <workspace> is optional — only used
+# when the descriptor sets workspace_var (e.g. GOPATH for go).
 candidate_emit_exports() {
-    local home="$1"
+    local home="$1" workspace="${2:-}"
+    local home_path
     if [[ -n "$candidate_home_var" ]]; then
         echo "export ${candidate_home_var}=\"${home}\""
-        echo "export PATH=\"\${${candidate_home_var}}/${candidate_bin_subdir}:\${PATH}\""
+        home_path="\${${candidate_home_var}}/${candidate_bin_subdir}"
     else
-        echo "export PATH=\"${home}/${candidate_bin_subdir}:\${PATH}\""
+        home_path="${home}/${candidate_bin_subdir}"
     fi
     local v
     for v in $candidate_extra_vars; do
         echo "export ${v}=\"${home}\""
     done
+    if [[ -n "$candidate_workspace_var" && -n "$workspace" ]]; then
+        echo "export ${candidate_workspace_var}=\"${workspace}\""
+    fi
+    local path_line="$home_path"
+    if [[ -n "$candidate_workspace_var" && -n "$candidate_workspace_bin" && -n "$workspace" ]]; then
+        path_line="${path_line}:\${${candidate_workspace_var}}/${candidate_workspace_bin}"
+    fi
+    echo "export PATH=\"${path_line}:\${PATH}\""
+}
+
+# Compute the workspace dir for a given version. Echoes empty if no workspace_var.
+candidate_workspace_dir() {
+    local version="$1"
+    if [[ -z "$candidate_workspace_var" || -z "$candidate_workspace_subdir" ]]; then
+        return 0
+    fi
+    echo "${DTM_ROOT}/${candidate_workspace_subdir}/${version}"
+}
+
+# Create workspace dir + init subdirs (idempotent).
+candidate_workspace_ensure() {
+    local ws_dir="$1"
+    [[ -z "$ws_dir" ]] && return 0
+    if [[ ! -d "$ws_dir" ]]; then
+        if [[ -n "$candidate_workspace_init" ]]; then
+            local init="${candidate_workspace_init//,/ }"
+            local sub
+            for sub in $init; do
+                mkdir -p "$ws_dir/$sub"
+            done
+        else
+            mkdir -p "$ws_dir"
+        fi
+    fi
 }
 
 # --- version-list strategies -------------------------------------------------
@@ -156,6 +214,47 @@ strategy_hashicorp_releases_list() {
     candidate_filter_versions "$versions"
 }
 
+# Maven Central metadata XML: lists every published version of an artifact.
+# Strategy arg is the artifact path (e.g. "org/apache/maven/apache-maven").
+# Excludes hyphenated versions (RCs, alphas, milestones).
+strategy_maven_central_list() {
+    local artifact_path="$1"
+    local url="${DTM_MAVEN_REPO}/${artifact_path}/maven-metadata.xml"
+    local response
+    response=$(curl -fsSL --retry 3 --retry-delay 2 "$url" 2>/dev/null) || return 1
+    local versions
+    versions=$(echo "$response" \
+        | grep -o '<version>[^<]*</version>' \
+        | sed 's/<[^>]*>//g' \
+        | grep -v -- '-')
+    candidate_filter_versions "$versions"
+}
+
+# Gradle versions API: services.gradle.org/versions/all (JSON list of releases).
+# Strategy arg is ignored. Excludes snapshots, nightlies, RCs, milestones, broken.
+strategy_gradle_versions_list() {
+    local response
+    response=$(curl -fsSL --retry 3 --retry-delay 2 \
+        "${DTM_GRADLE_DIST}/versions/all" 2>/dev/null) || return 1
+    local versions
+    versions=$(echo "$response" | jq -r \
+        '.[] | select(.snapshot==false and .nightly==false and .broken==false and .rcFor=="" and .milestoneFor=="") | .version' \
+        2>/dev/null) || return 1
+    candidate_filter_versions "$versions"
+}
+
+# go.dev download index: all stable Go releases. Strategy arg is ignored.
+# version_tag_prefix=go strips the "go" prefix from upstream "go1.22.0" tags.
+strategy_go_dl_list() {
+    local response
+    response=$(curl -fsSL --retry 3 --retry-delay 2 \
+        "${DTM_GO_DIST}/dl/?mode=json&include=all" 2>/dev/null) || return 1
+    local versions
+    versions=$(echo "$response" | jq -r \
+        '.[] | select(.stable==true) | .version' 2>/dev/null) || return 1
+    candidate_filter_versions "$versions"
+}
+
 # Apply candidate_version_tag_prefix + candidate_version_filter, then sort/dedup.
 candidate_filter_versions() {
     local list="$1"
@@ -175,6 +274,9 @@ candidate_list_versions() {
     case "$candidate_version_strategy" in
         github_releases)    strategy_github_releases_list    "$candidate_version_strategy_arg" ;;
         hashicorp_releases) strategy_hashicorp_releases_list "$candidate_version_strategy_arg" ;;
+        maven_central)      strategy_maven_central_list      "$candidate_version_strategy_arg" ;;
+        gradle_versions)    strategy_gradle_versions_list ;;
+        go_dl)              strategy_go_dl_list ;;
         *) log_error "Unknown version strategy: $candidate_version_strategy" >&2; return 1 ;;
     esac
 }
@@ -198,6 +300,17 @@ candidate_pull() {
             exit 1
         fi
         log_info "Latest ${name}: $exact"
+    elif [[ "$version" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        # Major or major.minor → resolve to latest matching patch.
+        log_info "Resolving latest ${name} ${version} patch..."
+        exact=$(candidate_list_versions \
+            | grep -E "^${version//./\\.}(\$|\\.)" \
+            | sort -V | tail -1)
+        if [[ -z "$exact" ]]; then
+            log_error "No ${name} versions found matching prefix '${version}'"
+            exit 1
+        fi
+        log_info "Latest ${name} ${version}: $exact"
     fi
 
     local root install_dir lock_path
@@ -280,6 +393,13 @@ candidate_pull() {
             trap - EXIT INT TERM
             exit 1
         fi
+    fi
+
+    local ws_dir
+    ws_dir=$(candidate_workspace_dir "$exact")
+    if [[ -n "$ws_dir" ]]; then
+        candidate_workspace_ensure "$ws_dir"
+        log_info "Workspace ready at $ws_dir"
     fi
 
     dtm_release_lock "$lock_path"
@@ -416,7 +536,9 @@ candidate_set() {
     if [[ -d "${root}/${version}" && ! -L "${root}/${version}" ]]; then
         install_dir="${root}/${version}"
     else
-        install_dir=$(find "$root" -maxdepth 1 -type d -name "${version}*" 2>/dev/null | sort -V | tail -1)
+        # Strict prefix match: require a dot boundary so "1.2" doesn't match
+        # "1.20" — picks the latest installed patch in the requested series.
+        install_dir=$(find "$root" -maxdepth 1 -type d -name "${version}.*" 2>/dev/null | sort -V | tail -1)
         if [[ -z "$install_dir" ]]; then
             log_error "${name} ${version} is not installed"
             log_info "Available versions:"
@@ -427,6 +549,14 @@ candidate_set() {
 
     local resolved
     resolved=$(basename "$install_dir")
+
+    # Workspace dir + stable symlink (only when descriptor declares a workspace_var).
+    local ws_dir="" ws_root="" ws_stable=""
+    if [[ -n "$candidate_workspace_var" && -n "$candidate_workspace_subdir" ]]; then
+        ws_root="${DTM_ROOT}/${candidate_workspace_subdir}"
+        ws_dir="${ws_root}/${resolved}"
+        candidate_workspace_ensure "$ws_dir"
+    fi
 
     if [[ "$mode" == "set" ]]; then
         log_info "Setting ${name} to ${resolved}..." >&2
@@ -439,20 +569,28 @@ candidate_set() {
         for v in $candidate_extra_vars; do
             dtm_clean_dtmrc_for "$v"
         done
+        if [[ -n "$candidate_workspace_var" ]]; then
+            dtm_clean_dtmrc_for "$candidate_workspace_var"
+        fi
         dtm_set_current_symlink "$root" "$install_dir"
+        if [[ -n "$ws_dir" ]]; then
+            mkdir -p "$ws_root"
+            ln -sfn "$ws_dir" "${ws_root}/current"
+            ws_stable="${ws_root}/current"
+        fi
 
         local stable="${root}/current"
-        candidate_emit_exports "$stable" >> "$DTM_CONFIG"
+        candidate_emit_exports "$stable" "$ws_stable" >> "$DTM_CONFIG"
 
         log_success "${name} ${resolved} activated" >&2
         log_info "Applying changes to current shell..." >&2
 
-        candidate_emit_exports "$stable"
+        candidate_emit_exports "$stable" "$ws_stable"
         return 0
     fi
 
-    # use mode: per-shell only, direct path, no symlink update.
-    candidate_emit_exports "$install_dir"
+    # use mode: per-shell only, direct paths, no symlink update.
+    candidate_emit_exports "$install_dir" "$ws_dir"
 }
 
 candidate_list() {
@@ -538,12 +676,27 @@ candidate_current() {
     version=$(basename "$resolved")
 
     if [[ -n "$DTM_OUTPUT_JSON" ]]; then
+        local ws_link="" ws_resolved=""
+        if [[ -n "$candidate_workspace_var" ]]; then
+            ws_link="${!candidate_workspace_var:-}"
+            if [[ -n "$ws_link" && -e "$ws_link" ]]; then
+                ws_resolved=$(dtm_resolved_path "$ws_link")
+            fi
+        fi
         jq -nc \
             --arg tool "$name" \
             --arg version "$version" \
             --arg path "$resolved" \
             --arg link "$cur" \
-            '{tool:$tool,version:$version,path:$path,link:$link}'
+            --arg ws_var "$candidate_workspace_var" \
+            --arg ws_link "$ws_link" \
+            --arg ws_path "$ws_resolved" \
+            '{tool:$tool,version:$version,path:$path,link:$link}
+             + (if $ws_var == "" then {} else
+                  {workspace: {var:$ws_var,
+                               link:(if $ws_link=="" then null else $ws_link end),
+                               path:(if $ws_path=="" then null else $ws_path end)}}
+                end)'
         return 0
     fi
     echo "$version"
@@ -619,16 +772,24 @@ candidate_remove() {
     local name="$1" version="$2"
     candidate_load "$name" || exit 1
 
-    local root install_dir
+    local root install_dir ws_root ws_dir
     root=$(candidate_root)
     install_dir="${root}/${version}"
+    ws_dir=$(candidate_workspace_dir "$version")
+    if [[ -n "$candidate_workspace_subdir" ]]; then
+        ws_root="${DTM_ROOT}/${candidate_workspace_subdir}"
+    fi
 
     if [[ ! -d "$install_dir" ]]; then
         log_error "${name} ${version} is not installed"
         return 1
     fi
 
-    log_warn "About to remove ${name} ${version} from $install_dir"
+    log_warn "About to remove ${name} ${version} from:"
+    log_warn "  - $install_dir"
+    if [[ -n "$ws_dir" && -d "$ws_dir" ]]; then
+        log_warn "  - $ws_dir (workspace)"
+    fi
     if dtm_confirm "Are you sure? (y/N): "; then
         if [[ -L "${root}/current" ]]; then
             local cur_target
@@ -637,7 +798,17 @@ candidate_remove() {
                 rm -f "${root}/current"
             fi
         fi
+        if [[ -n "$ws_root" && -L "${ws_root}/current" ]]; then
+            local cur_ws
+            cur_ws=$(dtm_resolved_path "${ws_root}/current" 2>/dev/null || true)
+            if [[ "$cur_ws" == "$ws_dir" ]]; then
+                rm -f "${ws_root}/current"
+            fi
+        fi
         rm -rf "$install_dir"
+        if [[ -n "$ws_dir" && -d "$ws_dir" ]]; then
+            rm -rf "$ws_dir"
+        fi
         log_success "${name} ${version} removed"
     else
         log_info "Removal cancelled"

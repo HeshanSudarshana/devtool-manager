@@ -67,10 +67,23 @@ complete -c dtm -n '__dtm_at_token 1' -a self-update -d 'Update dtm itself via g
 complete -c dtm -n '__dtm_at_token 1' -a uninstall   -d 'Remove dtm itself (symlink, hooks, config)'
 complete -c dtm -n '__dtm_at_token 1' -a config      -d 'Get or set dtm configuration'
 
-# Tool argument
+# Tool argument — pull the live list from dtm so candidate descriptors show
+# up without editing this file.
+function __dtm_tools
+    set -l names (command dtm tools 2>/dev/null)
+    if test (count $names) -eq 0
+        echo java
+        echo node
+        echo python
+    else
+        for n in $names
+            echo $n
+        end
+    end
+end
 set -l tool_cmds pull set use list current available update remove
 for c in $tool_cmds
-    complete -c dtm -n "__dtm_at_token 2; and __dtm_cmd | string match -q $c" -a 'java maven gradle go node python'
+    complete -c dtm -n "__dtm_at_token 2; and __dtm_cmd | string match -q $c" -a '(__dtm_tools)'
 end
 
 # config subcommand

@@ -440,18 +440,6 @@ source_modules() {
         source "${script_dir}/modules/java.sh"
     fi
 
-    if [[ -f "${script_dir}/modules/maven.sh" ]]; then
-        source "${script_dir}/modules/maven.sh"
-    fi
-
-    if [[ -f "${script_dir}/modules/gradle.sh" ]]; then
-        source "${script_dir}/modules/gradle.sh"
-    fi
-
-    if [[ -f "${script_dir}/modules/go.sh" ]]; then
-        source "${script_dir}/modules/go.sh"
-    fi
-
     if [[ -f "${script_dir}/modules/node.sh" ]]; then
         source "${script_dir}/modules/node.sh"
     fi
@@ -533,16 +521,22 @@ doctor_command() {
     warnings=$((warnings+1))
     _doctor_problem warn "cannot verify dtm.sh is sourced"
 
-    local tool var_name tool_root bin_rel val resolved
-    for tool in java maven gradle go node python; do
-        case "$tool" in
-            java)   var_name=JAVA_HOME;   tool_root="${DTM_ROOT}/java";   bin_rel=bin/java ;;
-            maven)  var_name=MAVEN_HOME;  tool_root="${DTM_ROOT}/maven";  bin_rel=bin/mvn ;;
-            gradle) var_name=GRADLE_HOME; tool_root="${DTM_ROOT}/gradle"; bin_rel=bin/gradle ;;
-            go)     var_name=GOROOT;      tool_root="${DTM_ROOT}/go";     bin_rel=bin/go ;;
-            node)   var_name=NODE_HOME;   tool_root="${DTM_ROOT}/node";   bin_rel=bin/node ;;
-            python) var_name=PYTHON_HOME; tool_root="${DTM_ROOT}/python"; bin_rel=bin/python3 ;;
-        esac
+    # Build per-tool descriptors as "name|var|root|bin_rel" — legacy modules
+    # (java/node/python) plus every registered candidate.
+    local -a tool_descs=(
+        "java|JAVA_HOME|${DTM_ROOT}/java|bin/java"
+        "node|NODE_HOME|${DTM_ROOT}/node|bin/node"
+        "python|PYTHON_HOME|${DTM_ROOT}/python|bin/python3"
+    )
+    local _cname
+    for _cname in "${!DTM_CANDIDATE_FILES[@]}"; do
+        candidate_load "$_cname" || continue
+        tool_descs+=("${_cname}|${candidate_home_var}|${DTM_ROOT}/${_cname}|${candidate_binary_check}")
+    done
+
+    local tool var_name tool_root bin_rel val resolved desc
+    for desc in "${tool_descs[@]}"; do
+        IFS='|' read -r tool var_name tool_root bin_rel <<< "$desc"
         log_info "[$tool]"
 
         local tool_active="" tool_active_path="" tool_in_path="false"
@@ -592,15 +586,16 @@ doctor_command() {
             tool_active="$(basename "$resolved")"
             tool_active_path="$resolved"
             log_success "  active: $tool_active"
+            local bin_dir="${val}/$(dirname "$bin_rel")"
             case ":$PATH:" in
-                *":$val/bin:"*)
-                    log_success "  $val/bin in PATH"
+                *":$bin_dir:"*)
+                    log_success "  $bin_dir in PATH"
                     tool_in_path="true"
                     ;;
                 *)
-                    log_error "  $val/bin not in PATH"
+                    log_error "  $bin_dir not in PATH"
                     issues=$((issues+1))
-                    _doctor_problem error "$val/bin not in PATH"
+                    _doctor_problem error "$bin_dir not in PATH"
                     ;;
             esac
         fi
@@ -634,12 +629,21 @@ doctor_command() {
     fi
 
     log_info "[orphans] checking top-level entries under $DTM_ROOT..."
-    local known_re='^(java|maven|gradle|go|node|python|go-workspaces)$'
+    # Build the known-entries set: legacy modules + every registered candidate
+    # name + any workspace_subdir declared by a candidate.
+    local -A known_set=([java]=1 [node]=1 [python]=1)
+    for _cname in "${!DTM_CANDIDATE_FILES[@]}"; do
+        known_set["$_cname"]=1
+        candidate_load "$_cname" || continue
+        if [[ -n "$candidate_workspace_subdir" ]]; then
+            known_set["$candidate_workspace_subdir"]=1
+        fi
+    done
     local orphans=() entry name
     for entry in "$DTM_ROOT"/*; do
         [[ -e "$entry" ]] || continue
         name=$(basename "$entry")
-        if ! [[ "$name" =~ $known_re ]]; then
+        if [[ -z "${known_set[$name]:-}" ]]; then
             orphans+=("$entry")
         fi
     done
@@ -1061,6 +1065,21 @@ main() {
         exit 0
     fi
 
+    # `dtm tools` — print every tool dtm knows about, one per line. Used by
+    # shell completions and dtm.sh's .tool-versions allowlist so they stay
+    # in sync with what's actually wired up.
+    if [[ "$command" == "tools" ]]; then
+        source_modules
+        {
+            echo java
+            echo node
+            echo python
+            local _t
+            for _t in "${!DTM_CANDIDATE_FILES[@]}"; do echo "$_t"; done
+        } | sort -u
+        exit 0
+    fi
+
     # All other commands require at least tool argument
     if [[ $# -lt 2 ]]; then
         show_usage
@@ -1109,9 +1128,6 @@ main() {
 
             case "$tool" in
                 java) pull_java "$version" ;;
-                maven) pull_maven "$version" ;;
-                gradle) pull_gradle "$version" ;;
-                go) pull_go "$version" ;;
                 node) pull_node "$version" ;;
                 python) pull_python "$version" ;;
                 *) log_error "Unknown tool: $tool"; exit 1 ;;
@@ -1125,9 +1141,6 @@ main() {
 
             case "$tool" in
                 java) set_java "$version" set ;;
-                maven) set_maven "$version" set ;;
-                gradle) set_gradle "$version" set ;;
-                go) set_go "$version" set ;;
                 node) set_node "$version" set ;;
                 python) set_python "$version" set ;;
                 *) log_error "Unknown tool: $tool"; exit 1 ;;
@@ -1141,9 +1154,6 @@ main() {
 
             case "$tool" in
                 java) set_java "$version" use ;;
-                maven) set_maven "$version" use ;;
-                gradle) set_gradle "$version" use ;;
-                go) set_go "$version" use ;;
                 node) set_node "$version" use ;;
                 python) set_python "$version" use ;;
                 *) log_error "Unknown tool: $tool"; exit 1 ;;
@@ -1152,9 +1162,6 @@ main() {
         list)
             case "$tool" in
                 java) list_java ;;
-                maven) list_maven ;;
-                gradle) list_gradle ;;
-                go) list_go ;;
                 node) list_node ;;
                 python) list_python ;;
                 *) log_error "Unknown tool: $tool"; exit 1 ;;
@@ -1163,9 +1170,6 @@ main() {
         current)
             case "$tool" in
                 java) current_java ;;
-                maven) current_maven ;;
-                gradle) current_gradle ;;
-                go) current_go ;;
                 node) current_node ;;
                 python) current_python ;;
                 *) log_error "Unknown tool: $tool"; exit 1 ;;
@@ -1175,9 +1179,6 @@ main() {
             dtm_check_deps
             case "$tool" in
                 java) available_java "$version" ;;
-                maven) available_maven "$version" ;;
-                gradle) available_gradle "$version" ;;
-                go) available_go "$version" ;;
                 node) available_node "$version" ;;
                 python) available_python "$version" ;;
                 *) log_error "Unknown tool: $tool"; exit 1 ;;
@@ -1191,9 +1192,6 @@ main() {
 
             case "$tool" in
                 java) remove_java "$version" ;;
-                maven) remove_maven "$version" ;;
-                gradle) remove_gradle "$version" ;;
-                go) remove_go "$version" ;;
                 node) remove_node "$version" ;;
                 python) remove_python "$version" ;;
                 *) log_error "Unknown tool: $tool"; exit 1 ;;
@@ -1203,9 +1201,6 @@ main() {
             dtm_check_deps
             case "$tool" in
                 java) update_java ;;
-                maven) update_maven ;;
-                gradle) update_gradle ;;
-                go) update_go ;;
                 node) update_node ;;
                 python) update_python ;;
                 *) log_error "Unknown tool: $tool"; exit 1 ;;
