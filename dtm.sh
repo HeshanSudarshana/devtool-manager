@@ -41,6 +41,7 @@ dtm() {
 # Opt in by exporting DTM_AUTO_SWITCH=1 before sourcing this file.
 
 # Walk up from $PWD until a .tool-versions file is found. Echoes its path.
+# shellcheck disable=SC2120  # optional arg defaults to $PWD; call sites don't pass.
 _dtm_find_tool_versions() {
     local dir="${1:-$PWD}"
     while [[ -n "$dir" && "$dir" != "/" ]]; do
@@ -69,6 +70,7 @@ _dtm_file_mtime() {
 # match the last applied file, so safe to invoke from prompt hooks.
 _dtm_apply_tool_versions() {
     local file mtime
+    # shellcheck disable=SC2119  # function accepts an optional arg; we use the default.
     if ! file=$(_dtm_find_tool_versions); then
         _DTM_LAST_TOOL_VERSIONS_PATH=""
         _DTM_LAST_TOOL_VERSIONS_MTIME=""

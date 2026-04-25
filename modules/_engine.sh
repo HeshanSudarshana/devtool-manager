@@ -62,9 +62,15 @@ candidate_reset() {
     candidate_checksum_url=""
     candidate_checksum_algo="sha256"
     candidate_checksum_format="single"
+    # candidate_os_*/arch_* are read indirectly via ${!os_key} in
+    # candidate_render_url; shellcheck can't see that, so silence SC2034.
+    # shellcheck disable=SC2034
     candidate_os_linux="linux"
+    # shellcheck disable=SC2034
     candidate_os_mac="mac"
+    # shellcheck disable=SC2034
     candidate_arch_x64="x64"
+    # shellcheck disable=SC2034
     candidate_arch_aarch64="aarch64"
     candidate_version_strategy=""
     candidate_version_strategy_arg=""
@@ -307,6 +313,8 @@ candidate_filter_versions() {
     local list="$1"
     local prefix="${candidate_version_tag_prefix:-}"
     if [[ -n "$prefix" ]]; then
+        # sed s///, not ${var//}: needs per-line ^anchor on multiline input.
+        # shellcheck disable=SC2001
         list=$(echo "$list" | sed "s/^${prefix}//")
     fi
     local filter="${candidate_version_filter:-}"
@@ -783,7 +791,7 @@ candidate_update() {
 
     local current major_minor latest install_dir root
     root=$(candidate_root)
-    current=$(DTM_OUTPUT_JSON= candidate_current "$name") || {
+    current=$(DTM_OUTPUT_JSON='' candidate_current "$name") || {
         log_error "No active ${name} version to update"
         exit 1
     }

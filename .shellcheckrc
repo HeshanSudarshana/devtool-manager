@@ -1,0 +1,3 @@
+# dtm sources modules/candidates by computed paths, so shellcheck cannot
+# follow them statically. Disable the corresponding warnings.
+disable=SC1090,SC1091

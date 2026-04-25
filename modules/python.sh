@@ -338,6 +338,8 @@ available_python() {
             return 0
         fi
         log_info "Available Python versions:"
+        # sed prepends per-line indent; ${var//} can't anchor on ^.
+        # shellcheck disable=SC2001
         echo "$versions" | sed 's/^/    /'
         return 0
     fi
@@ -391,7 +393,7 @@ current_python() {
 # Update active Python to latest patch in current major.minor series.
 update_python() {
     local current major_minor latest install_dir resolved
-    current=$(DTM_OUTPUT_JSON= current_python) || {
+    current=$(DTM_OUTPUT_JSON='' current_python) || {
         log_error "No active Python version to update"
         exit 1
     }

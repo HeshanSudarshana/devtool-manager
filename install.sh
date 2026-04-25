@@ -79,9 +79,11 @@ fi
 if ! grep -q "source.*dtm.sh" "$SHELL_RC" 2>/dev/null; then
     echo ""
     echo "Adding dtm auto-apply wrapper to $SHELL_RC..."
-    echo "" >> "$SHELL_RC"
-    echo "# DevTool Manager - auto-apply wrapper" >> "$SHELL_RC"
-    echo "source \"${SCRIPT_DIR}/dtm.sh\"" >> "$SHELL_RC"
+    {
+        echo ""
+        echo "# DevTool Manager - auto-apply wrapper"
+        echo "source \"${SCRIPT_DIR}/dtm.sh\""
+    } >> "$SHELL_RC"
     echo "✓ Added to $SHELL_RC"
     echo ""
     echo "To use immediately in this session, run:"
@@ -120,9 +122,11 @@ COMPLETIONS_DIR="${SCRIPT_DIR}/completions"
 case "$ACTIVE_SHELL" in
     bash)
         if ! grep -q "completions/dtm.bash" "$SHELL_RC" 2>/dev/null; then
-            echo "" >> "$SHELL_RC"
-            echo "# DevTool Manager - bash completion" >> "$SHELL_RC"
-            echo "[ -f \"${COMPLETIONS_DIR}/dtm.bash\" ] && source \"${COMPLETIONS_DIR}/dtm.bash\"" >> "$SHELL_RC"
+            {
+                echo ""
+                echo "# DevTool Manager - bash completion"
+                echo "[ -f \"${COMPLETIONS_DIR}/dtm.bash\" ] && source \"${COMPLETIONS_DIR}/dtm.bash\""
+            } >> "$SHELL_RC"
             echo "✓ Added bash completion source to $SHELL_RC"
         else
             echo "✓ bash completion already wired into $SHELL_RC"

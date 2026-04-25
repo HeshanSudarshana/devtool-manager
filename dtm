@@ -230,7 +230,6 @@ dtm_acquire_lock() {
         fi
         sleep 1
     done
-    DTM_LOCK_MKDIR="$lock_path"
     return 0
 }
 
@@ -241,7 +240,6 @@ dtm_release_lock() {
         rm -f "$lock_path"
     else
         rmdir "$lock_path" 2>/dev/null || true
-        unset DTM_LOCK_MKDIR
     fi
 }
 
@@ -419,8 +417,9 @@ EOF
 
 # Detect OS and architecture
 detect_platform() {
-    local os=$(uname -s | tr '[:upper:]' '[:lower:]')
-    local arch=$(uname -m)
+    local os arch
+    os=$(uname -s | tr '[:upper:]' '[:lower:]')
+    arch=$(uname -m)
 
     case "$os" in
         linux*) OS="linux" ;;
@@ -442,7 +441,8 @@ source_modules() {
     while [ -L "$script_path" ]; do
         script_path="$(readlink "$script_path")"
     done
-    local script_dir="$(cd "$(dirname "$script_path")" && pwd)"
+    local script_dir
+    script_dir="$(cd "$(dirname "$script_path")" && pwd)"
 
     if [[ -f "${script_dir}/modules/java.sh" ]]; then
         source "${script_dir}/modules/java.sh"
@@ -612,7 +612,8 @@ doctor_command() {
             tool_active="$(basename "$resolved")"
             tool_active_path="$resolved"
             log_success "  active: $tool_active"
-            local bin_dir="${val}/$(dirname "$bin_rel")"
+            local bin_dir
+            bin_dir="${val}/$(dirname "$bin_rel")"
             case ":$PATH:" in
                 *":$bin_dir:"*)
                     log_success "  $bin_dir in PATH"
@@ -1240,4 +1241,6 @@ main() {
     esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

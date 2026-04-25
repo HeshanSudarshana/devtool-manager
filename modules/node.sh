@@ -22,6 +22,8 @@ _node_os_index_key() {
 }
 
 _node_arch() {
+    # ARCH is set globally by detect_platform() in dtm.
+    # shellcheck disable=SC2153
     case "$ARCH" in
         x64)     echo "x64" ;;
         aarch64) echo "arm64" ;;
@@ -386,7 +388,7 @@ current_node() {
 # Update active Node to latest patch in current major series.
 update_node() {
     local current major latest install_dir
-    current=$(DTM_OUTPUT_JSON= current_node) || {
+    current=$(DTM_OUTPUT_JSON='' current_node) || {
         log_error "No active Node version to update"
         exit 1
     }

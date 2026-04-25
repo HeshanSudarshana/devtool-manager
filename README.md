@@ -695,6 +695,27 @@ Java; LTS-aware Node; PBS-flavored Python). Each implements:
 - `available_<tool>` - Query upstream for installable versions (optional)
 - `remove_<tool>` - Remove version
 
+### Tests
+
+Unit tests live under `tests/` and run with [bats-core](https://github.com/bats-core/bats-core).
+They cover pure helpers only — no network, no real downloads.
+
+```bash
+# Arch / CachyOS
+sudo pacman -S bats shellcheck
+# macOS
+brew install bats-core shellcheck
+# Debian / Ubuntu
+sudo apt-get install bats shellcheck
+
+bats tests/
+shellcheck dtm dtm.sh install.sh modules/*.sh
+```
+
+CI runs both on every push (`.github/workflows/ci.yml`) on Linux and macOS.
+dtm requires bash 4+ (uses `declare -gA`); the macOS-default bash 3.2 is not
+supported.
+
 ## License
 
 Apache License 2.0

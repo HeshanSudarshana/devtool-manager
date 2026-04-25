@@ -71,7 +71,7 @@ java_dir_version() {
     local name="$1" prefix
     for prefix in "${JAVA_DISTS_SUPPORTED[@]}"; do
         if [[ "$prefix" != "temurin" && "$name" == "${prefix}-"* ]]; then
-            echo "${name#${prefix}-}"
+            echo "${name#"${prefix}"-}"
             return
         fi
     done
@@ -666,7 +666,8 @@ pull_java() {
 #   <dist>@<exact>     -> exact dist install
 _resolve_installed_java() {
     local dist="$1" version="$2"
-    local exact_dir="${JAVA_ROOT}/$(java_dir_name "$dist" "$version")"
+    local exact_dir
+    exact_dir="${JAVA_ROOT}/$(java_dir_name "$dist" "$version")"
     if [[ -d "$exact_dir" && ! -L "$exact_dir" ]]; then
         echo "$exact_dir"
         return 0
