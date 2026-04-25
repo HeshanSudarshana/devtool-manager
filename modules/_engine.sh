@@ -15,10 +15,12 @@
 #   binary_check            Path under install dir that proves a valid install (e.g. bin/kotlinc).
 #   archive_format          tar.gz | tgz | tar.xz | zip | binary.
 #                           `binary` = no archive, payload is the raw executable.
-#   archive_layout          nested      = single top-level dir, its contents become install_dir.
-#                           flat        = extract contents directly into install_dir.
-#                           flat_to_bin = single binary at archive root, install as bin_subdir/binary_name.
-#                           binary      = (set automatically when archive_format=binary).
+#   archive_layout          nested        = single top-level dir, its contents become install_dir.
+#                           flat          = extract contents directly into install_dir.
+#                           flat_to_bin   = single binary at archive root, install as bin_subdir/binary_name.
+#                           nested_to_bin = single top-level dir containing a binary (plus optional
+#                                           docs); install just the binary as bin_subdir/binary_name.
+#                           binary        = (set automatically when archive_format=binary).
 #                           Backwards-compat: archive_strip_top=1 maps to nested, =0 maps to flat.
 #   download_url            Template. Substitutions: ${VERSION}, ${OS}, ${ARCH}.
 #   checksum_url            Optional sidecar URL template (omitted = skip with warning).
@@ -370,6 +372,31 @@ candidate_extract() {
             fi
             mkdir -p "${install_dir}/${candidate_bin_subdir}"
             mv "$src" "${install_dir}/${candidate_bin_subdir}/${candidate_binary_name}"
+            chmod +x "${install_dir}/${candidate_bin_subdir}/${candidate_binary_name}"
+            ;;
+        nested_to_bin)
+            if [[ -z "$candidate_binary_name" ]]; then
+                log_error "binary_name required when archive_layout=nested_to_bin"
+                return 1
+            fi
+            local nb_count nb_top nb_src
+            nb_count=$(find "$stage" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')
+            if [[ "$nb_count" != "1" ]]; then
+                log_error "Expected single top-level entry in archive, found $nb_count"
+                return 1
+            fi
+            nb_top=$(find "$stage" -mindepth 1 -maxdepth 1 | head -1)
+            if [[ ! -d "$nb_top" ]]; then
+                log_error "Top-level entry in archive is not a directory: $nb_top"
+                return 1
+            fi
+            nb_src="${nb_top}/${candidate_binary_name}"
+            if [[ ! -f "$nb_src" ]]; then
+                log_error "Expected binary inside top-level dir: ${candidate_binary_name}"
+                return 1
+            fi
+            mkdir -p "${install_dir}/${candidate_bin_subdir}"
+            mv "$nb_src" "${install_dir}/${candidate_bin_subdir}/${candidate_binary_name}"
             chmod +x "${install_dir}/${candidate_bin_subdir}/${candidate_binary_name}"
             ;;
         *)
