@@ -12,7 +12,7 @@ get_latest_go_version() {
     log_info "Fetching latest Go $major_minor version..." >&2
 
     local response
-    response=$(curl -fsSL --retry 3 --retry-delay 2 "https://go.dev/dl/?mode=json" 2>/dev/null) || {
+    response=$(curl -fsSL --retry 3 --retry-delay 2 "${DTM_GO_DIST}/dl/?mode=json" 2>/dev/null) || {
         log_error "Failed to query go.dev download index" >&2
         return 1
     }
@@ -50,7 +50,7 @@ get_go_download_url() {
         aarch64) arch_name="arm64" ;;
     esac
     
-    local download_url="https://go.dev/dl/go${version}.${os_name}-${arch_name}.tar.gz"
+    local download_url="${DTM_GO_DIST}/dl/go${version}.${os_name}-${arch_name}.tar.gz"
 
     if ! dtm_url_exists "$download_url"; then
         log_error "Could not find download URL for Go $version (OS: $os_name, ARCH: $arch_name)" >&2
@@ -113,8 +113,9 @@ pull_go() {
     fi
 
     log_info "Fetching checksum..."
-    # Go publishes sha256 at dl.google.com, not go.dev (where the URL is HTML)
-    local checksum_url="${download_url/https:\/\/go.dev\/dl\//https://dl.google.com/go/}.sha256"
+    # Go publishes sha256 at dl.google.com, not go.dev (where the URL is HTML).
+    # Both endpoints are overridable via DTM_GO_DIST / DTM_GO_CHECKSUM.
+    local checksum_url="${DTM_GO_CHECKSUM}/${download_url#${DTM_GO_DIST}/dl/}.sha256"
     local expected_checksum
     expected_checksum=$(fetch_checksum_from_url "$checksum_url")
     if [[ -z "$expected_checksum" ]]; then
@@ -291,7 +292,7 @@ available_go() {
     log_info "Fetching available Go versions..." >&2
     local response
     response=$(curl -fsSL --retry 3 --retry-delay 2 \
-        "https://go.dev/dl/?mode=json&include=all" 2>/dev/null) || {
+        "${DTM_GO_DIST}/dl/?mode=json&include=all" 2>/dev/null) || {
         log_error "Failed to query go.dev download index" >&2
         return 1
     }

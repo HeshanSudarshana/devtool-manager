@@ -396,6 +396,51 @@ echo 'source ~/.dtmconfig' >> ~/.bashrc  # or ~/.zshrc
 
 The tool creates a configuration file at `~/.dtmrc` which contains environment variables for the active tool versions. This file is updated by the `dtm set` command.
 
+### Proxy and Mirrors
+
+dtm uses `curl` for all network requests, so the standard proxy environment
+variables are honored automatically — you do not need to configure anything
+inside dtm:
+
+```bash
+export HTTPS_PROXY=http://proxy.corp:3128
+export HTTP_PROXY=http://proxy.corp:3128
+export NO_PROXY=localhost,127.0.0.1,.corp
+```
+
+Set these in your shell rc, in `~/.dtmconfig`, or per-invocation. `curl` reads
+them on every request.
+
+You can also redirect dtm to alternative upstream registries (corporate
+caches, Adoptium / Maven / Gradle / Go mirrors) via these env vars:
+
+| Variable           | Default                                    | Used by                |
+| ------------------ | ------------------------------------------ | ---------------------- |
+| `DTM_TEMURIN_API`  | `https://api.adoptium.net/v3`              | `dtm pull/available java` (Temurin) |
+| `DTM_MAVEN_REPO`   | `https://repo.maven.apache.org/maven2`     | `dtm available/update maven` (metadata) |
+| `DTM_MAVEN_DIST`   | `https://archive.apache.org/dist/maven`    | `dtm pull maven` (binaries + sha512) |
+| `DTM_GRADLE_DIST`  | `https://services.gradle.org`              | `dtm pull/available gradle` |
+| `DTM_GO_DIST`      | `https://go.dev`                           | `dtm pull/available go` |
+| `DTM_GO_CHECKSUM`  | `https://dl.google.com/go`                 | `dtm pull go` (sha256 sidecars) |
+
+Persist them by adding to `~/.dtmconfig`:
+
+```bash
+# ~/.dtmconfig
+export DTM_HOME="$HOME/development/devtools"
+export HTTPS_PROXY="http://proxy.corp:3128"
+export DTM_MAVEN_REPO="https://nexus.corp/repository/maven-public"
+export DTM_MAVEN_DIST="https://nexus.corp/repository/apache-maven"
+export DTM_TEMURIN_API="https://adoptium.mirror.corp/v3"
+```
+
+dtm sources `~/.dtmconfig` on every invocation. Verify the active configuration
+with `dtm doctor` (look for the `[network]` section, or use `--json` for the
+machine-readable form).
+
+> Note: only Temurin is mirror-aware on the Java side; the Zulu, Corretto, and
+> Liberica fetchers still talk to their upstream APIs directly.
+
 ## Requirements
 
 - Bash 4.0 or later

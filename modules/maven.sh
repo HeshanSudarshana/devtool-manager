@@ -8,7 +8,7 @@ MAVEN_ROOT="${DTM_ROOT}/maven"
 get_latest_maven_version() {
     log_info "Fetching latest Maven version..." >&2
 
-    local metadata_url="https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/maven-metadata.xml"
+    local metadata_url="${DTM_MAVEN_REPO}/org/apache/maven/apache-maven/maven-metadata.xml"
     local version
     version=$(curl -fsSL --retry 3 --retry-delay 2 "$metadata_url" 2>/dev/null \
         | grep -o '<latest>[^<]*</latest>' | sed 's/<[^>]*>//g')
@@ -25,7 +25,7 @@ get_latest_maven_version() {
 get_maven_download_url() {
     local version="$1"
 
-    local download_url="https://archive.apache.org/dist/maven/maven-3/${version}/binaries/apache-maven-${version}-bin.tar.gz"
+    local download_url="${DTM_MAVEN_DIST}/maven-3/${version}/binaries/apache-maven-${version}-bin.tar.gz"
 
     if ! dtm_url_exists "$download_url"; then
         log_error "Could not find download URL for Maven $version" >&2
@@ -234,7 +234,7 @@ list_maven() {
 #                 (e.g. "3" -> all 3.x, "3.9" -> all 3.9.x).
 available_maven() {
     local filter="$1"
-    local metadata_url="https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/maven-metadata.xml"
+    local metadata_url="${DTM_MAVEN_REPO}/org/apache/maven/apache-maven/maven-metadata.xml"
 
     log_info "Fetching available Maven versions..." >&2
     local response
@@ -305,7 +305,7 @@ get_latest_maven_for_prefix() {
     local prefix="$1"
     local response
     response=$(curl -fsSL --retry 3 --retry-delay 2 \
-        "https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/maven-metadata.xml" 2>/dev/null) || {
+        "${DTM_MAVEN_REPO}/org/apache/maven/apache-maven/maven-metadata.xml" 2>/dev/null) || {
         log_error "Failed to query Maven metadata" >&2
         return 1
     }

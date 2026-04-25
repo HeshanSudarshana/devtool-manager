@@ -11,7 +11,7 @@ get_latest_gradle_version() {
     log_info "Fetching latest Gradle $major_minor version..." >&2
 
     local response
-    response=$(curl -fsSL --retry 3 --retry-delay 2 "https://services.gradle.org/versions/all" 2>/dev/null) || {
+    response=$(curl -fsSL --retry 3 --retry-delay 2 "${DTM_GRADLE_DIST}/versions/all" 2>/dev/null) || {
         log_error "Failed to query Gradle versions API" >&2
         return 1
     }
@@ -36,7 +36,7 @@ get_gradle_download_url() {
     local version="$1"
     
     # Gradle download URL pattern (using -bin distribution, not -all)
-    local download_url="https://services.gradle.org/distributions/gradle-${version}-bin.zip"
+    local download_url="${DTM_GRADLE_DIST}/distributions/gradle-${version}-bin.zip"
     
     # Note: Gradle URLs return 307 redirect, so we don't need to verify
     # The API already validated the version exists
@@ -253,7 +253,7 @@ available_gradle() {
     log_info "Fetching available Gradle versions..." >&2
     local response
     response=$(curl -fsSL --retry 3 --retry-delay 2 \
-        "https://services.gradle.org/versions/all" 2>/dev/null) || {
+        "${DTM_GRADLE_DIST}/versions/all" 2>/dev/null) || {
         log_error "Failed to query Gradle versions API" >&2
         return 1
     }

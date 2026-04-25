@@ -28,16 +28,35 @@ set -e
 DTM_CONFIG="${HOME}/.dtmrc"
 DTM_SETTINGS="${HOME}/.dtmconfig"
 
-# Load DTM_HOME from settings file if it exists and DTM_HOME is not set
-if [[ -z "$DTM_HOME" && -f "$DTM_SETTINGS" ]]; then
+# Source ~/.dtmconfig unconditionally so persisted mirror/proxy overrides
+# apply even when DTM_HOME is already set in env. Env DTM_HOME still wins
+# over a value in the settings file (back-compat with prior behavior).
+_dtm_env_home="${DTM_HOME:-}"
+if [[ -f "$DTM_SETTINGS" ]]; then
     source "$DTM_SETTINGS"
 fi
+if [[ -n "$_dtm_env_home" ]]; then
+    DTM_HOME="$_dtm_env_home"
+fi
+unset _dtm_env_home
 
 # Set default if still not set
 DTM_ROOT="${DTM_HOME:-${HOME}/development/devtools}"
 
 # Create DTM_ROOT directory if it doesn't exist
 mkdir -p "$DTM_ROOT"
+
+# Mirror endpoints (override via env or ~/.dtmconfig). HTTPS_PROXY/HTTP_PROXY/
+# NO_PROXY are honored natively by curl, so no extra wiring is needed for
+# proxy support — set them in your shell or ~/.dtmconfig and they take effect.
+: "${DTM_TEMURIN_API:=https://api.adoptium.net/v3}"
+: "${DTM_MAVEN_REPO:=https://repo.maven.apache.org/maven2}"
+: "${DTM_MAVEN_DIST:=https://archive.apache.org/dist/maven}"
+: "${DTM_GRADLE_DIST:=https://services.gradle.org}"
+: "${DTM_GO_DIST:=https://go.dev}"
+: "${DTM_GO_CHECKSUM:=https://dl.google.com/go}"
+export DTM_TEMURIN_API DTM_MAVEN_REPO DTM_MAVEN_DIST \
+       DTM_GRADLE_DIST DTM_GO_DIST DTM_GO_CHECKSUM
 
 # Colors for output
 RED='\033[0;31m'
@@ -592,6 +611,44 @@ doctor_command() {
         log_success "  none"
     fi
 
+    log_info "[network] proxy + mirror configuration"
+    local proxy_https="${HTTPS_PROXY:-${https_proxy:-}}"
+    local proxy_http="${HTTP_PROXY:-${http_proxy:-}}"
+    local proxy_no="${NO_PROXY:-${no_proxy:-}}"
+    if [[ -n "$proxy_https" ]]; then
+        log_info "  HTTPS_PROXY=$proxy_https"
+    fi
+    if [[ -n "$proxy_http" ]]; then
+        log_info "  HTTP_PROXY=$proxy_http"
+    fi
+    if [[ -n "$proxy_no" ]]; then
+        log_info "  NO_PROXY=$proxy_no"
+    fi
+    if [[ -z "$proxy_https" && -z "$proxy_http" ]]; then
+        log_info "  no proxy configured (HTTPS_PROXY/HTTP_PROXY unset)"
+    fi
+
+    local -A _mirror_defaults=(
+        [DTM_TEMURIN_API]="https://api.adoptium.net/v3"
+        [DTM_MAVEN_REPO]="https://repo.maven.apache.org/maven2"
+        [DTM_MAVEN_DIST]="https://archive.apache.org/dist/maven"
+        [DTM_GRADLE_DIST]="https://services.gradle.org"
+        [DTM_GO_DIST]="https://go.dev"
+        [DTM_GO_CHECKSUM]="https://dl.google.com/go"
+    )
+    local -a _mirror_order=(DTM_TEMURIN_API DTM_MAVEN_REPO DTM_MAVEN_DIST \
+                            DTM_GRADLE_DIST DTM_GO_DIST DTM_GO_CHECKSUM)
+    local mvar mval mdef
+    for mvar in "${_mirror_order[@]}"; do
+        mval="${!mvar}"
+        mdef="${_mirror_defaults[$mvar]}"
+        if [[ "$mval" != "$mdef" ]]; then
+            log_info "  $mvar=$mval (overridden)"
+        else
+            log_info "  $mvar=$mval"
+        fi
+    done
+
     if [[ -n "$DTM_OUTPUT_JSON" ]]; then
         local tools_json="{}"
         local i
@@ -605,15 +662,37 @@ doctor_command() {
         if (( ${#json_problems[@]} > 0 )); then
             problems_json=$(printf '%s\n' "${json_problems[@]}" | jq -s .)
         fi
+        local mirrors_json="{}"
+        for mvar in "${_mirror_order[@]}"; do
+            mval="${!mvar}"
+            mdef="${_mirror_defaults[$mvar]}"
+            mirrors_json=$(jq -c \
+                --arg k "$mvar" \
+                --arg url "$mval" \
+                --argjson overridden "$([[ "$mval" != "$mdef" ]] && echo true || echo false)" \
+                '. + {($k): {url:$url, overridden:$overridden}}' <<< "$mirrors_json")
+        done
+        local network_json
+        network_json=$(jq -nc \
+            --arg https "$proxy_https" \
+            --arg http "$proxy_http" \
+            --arg no "$proxy_no" \
+            --argjson mirrors "$mirrors_json" \
+            '{proxy: {https: (if $https=="" then null else $https end),
+                      http:  (if $http=="" then null else $http end),
+                      no:    (if $no=="" then null else $no end)},
+              mirrors:$mirrors}')
         jq -n \
             --argjson errors "$issues" \
             --argjson warnings "$warnings" \
             --argjson tools "$tools_json" \
             --argjson problems "$problems_json" \
+            --argjson network "$network_json" \
             --arg dtm_home "$DTM_ROOT" \
             --arg dtmrc "$DTM_CONFIG" \
             '{ok: ($errors == 0), errors:$errors, warnings:$warnings,
-              dtm_home:$dtm_home, dtmrc:$dtmrc, tools:$tools, problems:$problems}'
+              dtm_home:$dtm_home, dtmrc:$dtmrc, tools:$tools,
+              network:$network, problems:$problems}'
         if (( issues > 0 )); then exit 1; fi
         return 0
     fi

@@ -92,7 +92,7 @@ _temurin_resolve_version() {
     log_info "Fetching latest Java $input version from Temurin..." >&2
     local response
     response=$(curl -fsSL --retry 3 --retry-delay 2 \
-        "https://api.adoptium.net/v3/assets/latest/${input}/hotspot?image_type=jdk" 2>/dev/null) || {
+        "${DTM_TEMURIN_API}/assets/latest/${input}/hotspot?image_type=jdk" 2>/dev/null) || {
         log_error "Failed to query Temurin API" >&2
         return 1
     }
@@ -118,13 +118,13 @@ _temurin_download_info() {
         mac)   os_suffix="mac" ;;
     esac
 
-    local api_url="https://api.adoptium.net/v3/assets/version/jdk-${version}"
+    local api_url="${DTM_TEMURIN_API}/assets/version/jdk-${version}"
     local response
     response=$(curl -fsSL --retry 3 --retry-delay 2 \
         "${api_url}?architecture=${ARCH}&image_type=jdk&os=${os_suffix}" 2>/dev/null || true)
 
     if [[ -z "$response" || "$response" == "[]" ]]; then
-        api_url="https://api.adoptium.net/v3/assets/latest/${major_version}/hotspot"
+        api_url="${DTM_TEMURIN_API}/assets/latest/${major_version}/hotspot"
         response=$(curl -fsSL --retry 3 --retry-delay 2 \
             "${api_url}?architecture=${ARCH}&image_type=jdk&os=${os_suffix}" 2>/dev/null || true)
     fi
@@ -146,7 +146,7 @@ _temurin_available() {
     if [[ -z "$major_version" ]]; then
         log_info "Fetching available Java major releases from Temurin..." >&2
         response=$(curl -fsSL --retry 3 --retry-delay 2 \
-            "https://api.adoptium.net/v3/info/available_releases" 2>/dev/null) || {
+            "${DTM_TEMURIN_API}/info/available_releases" 2>/dev/null) || {
             log_error "Failed to query Temurin API" >&2
             return 1
         }
@@ -175,7 +175,7 @@ _temurin_available() {
 
     log_info "Fetching available Temurin $major_version GA versions..." >&2
     local next=$((major_version + 1))
-    local url="https://api.adoptium.net/v3/info/release_versions"
+    local url="${DTM_TEMURIN_API}/info/release_versions"
     url="${url}?release_type=ga&page_size=50&sort_method=DEFAULT&sort_order=DESC"
     url="${url}&version=%5B${major_version}%2C${next}%29"
 
