@@ -59,8 +59,9 @@ mkdir -p "$DTM_ROOT"
 : "${DTM_GRADLE_DIST:=https://services.gradle.org}"
 : "${DTM_GO_DIST:=https://go.dev}"
 : "${DTM_GO_CHECKSUM:=https://dl.google.com/go}"
+: "${DTM_NODE_DIST:=https://nodejs.org/dist}"
 export DTM_TEMURIN_API DTM_MAVEN_REPO DTM_MAVEN_DIST \
-       DTM_GRADLE_DIST DTM_GO_DIST DTM_GO_CHECKSUM
+       DTM_GRADLE_DIST DTM_GO_DIST DTM_GO_CHECKSUM DTM_NODE_DIST
 
 # Colors for output. Disabled when NO_COLOR is set (https://no-color.org) or
 # when the relevant stream is not a TTY. Errors/warnings always go to stderr,
@@ -361,7 +362,7 @@ Supported tools:
   maven   - Apache Maven
   gradle  - Gradle Build Tool
   go      - Go Programming Language
-  node    - Node.js (via nvm)
+  node    - Node.js (prebuilt from nodejs.org)
   python  - Python (via pyenv)
 
 Java distribution spec: <dist>@<version>, or bare <version> for temurin.
@@ -383,6 +384,9 @@ Examples:
   dtm available java zulu       List Zulu major releases
   dtm available java zulu@21    List all Zulu 21 GA patches
   dtm available go 1.22         List Go versions matching 1.22.x
+  dtm pull node lts             Pull latest Node LTS
+  dtm available node            List Node majors with LTS marker
+  dtm available node 22         List all Node 22 patches
   dtm update java               Bump active Java to latest patch (preserves dist)
   dtm doctor                    Diagnose dtm install (deps, PATH, broken installs)
   dtm self-update               Pull latest dtm from its git remote
@@ -512,12 +516,13 @@ doctor_command() {
     _doctor_problem warn "cannot verify dtm.sh is sourced"
 
     local tool var_name tool_root bin_rel val resolved
-    for tool in java maven gradle go; do
+    for tool in java maven gradle go node; do
         case "$tool" in
             java)   var_name=JAVA_HOME;   tool_root="${DTM_ROOT}/java";   bin_rel=bin/java ;;
             maven)  var_name=MAVEN_HOME;  tool_root="${DTM_ROOT}/maven";  bin_rel=bin/mvn ;;
             gradle) var_name=GRADLE_HOME; tool_root="${DTM_ROOT}/gradle"; bin_rel=bin/gradle ;;
             go)     var_name=GOROOT;      tool_root="${DTM_ROOT}/go";     bin_rel=bin/go ;;
+            node)   var_name=NODE_HOME;   tool_root="${DTM_ROOT}/node";   bin_rel=bin/node ;;
         esac
         log_info "[$tool]"
 
@@ -654,9 +659,11 @@ doctor_command() {
         [DTM_GRADLE_DIST]="https://services.gradle.org"
         [DTM_GO_DIST]="https://go.dev"
         [DTM_GO_CHECKSUM]="https://dl.google.com/go"
+        [DTM_NODE_DIST]="https://nodejs.org/dist"
     )
     local -a _mirror_order=(DTM_TEMURIN_API DTM_MAVEN_REPO DTM_MAVEN_DIST \
-                            DTM_GRADLE_DIST DTM_GO_DIST DTM_GO_CHECKSUM)
+                            DTM_GRADLE_DIST DTM_GO_DIST DTM_GO_CHECKSUM \
+                            DTM_NODE_DIST)
     local mvar mval mdef
     for mvar in "${_mirror_order[@]}"; do
         mval="${!mvar}"
@@ -1074,9 +1081,10 @@ main() {
                 maven) available_maven "$version" ;;
                 gradle) available_gradle "$version" ;;
                 go) available_go "$version" ;;
-                node|python)
+                node) available_node "$version" ;;
+                python)
                     log_error "'available' is not supported for $tool"
-                    log_info "Use the upstream tool: 'nvm ls-remote' for node, 'pyenv install --list' for python"
+                    log_info "Use the upstream tool: 'pyenv install --list' for python"
                     exit 1
                     ;;
                 *) log_error "Unknown tool: $tool"; exit 1 ;;

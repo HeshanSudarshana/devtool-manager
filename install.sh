@@ -171,29 +171,11 @@ echo ""
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  Optional: Install Node.js and Python managers"
+echo "  Optional: Install Python manager"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "dtm can manage Node.js and Python using nvm and pyenv."
-echo ""
-
-# Check for nvm
-if ! command -v nvm &> /dev/null && [ ! -s "$HOME/.nvm/nvm.sh" ]; then
-    if confirm "Install nvm for Node.js management? (y/N): "; then
-        echo "Installing nvm from master branch..."
-        if curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/master/install.sh | bash; then
-            echo "✓ nvm installed successfully"
-            echo ""
-            echo "To use nvm in this session, run:"
-            echo "  source ~/.nvm/nvm.sh"
-        else
-            echo "✗ Failed to install nvm"
-        fi
-    fi
-else
-    echo "✓ nvm is already installed"
-fi
-
+echo "dtm can manage Python using pyenv. Node.js is managed natively"
+echo "(prebuilt tarballs from nodejs.org) — no third-party manager required."
 echo ""
 
 # Check for pyenv
@@ -253,5 +235,5 @@ echo ""
 echo "Installation complete! Try these commands:"
 echo "  dtm pull java 11      # Native Java management"
 echo "  dtm pull go 1.21      # Native Go management"
-echo "  dtm pull node 20      # Via nvm"
+echo "  dtm pull node lts     # Native Node management"
 echo "  dtm pull python 3.12  # Via pyenv"
