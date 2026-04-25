@@ -16,11 +16,23 @@ A command-line tool to manage development tools like JDK, Maven, Gradle, Go, Nod
 ## Supported Tools
 
 - **Java/JDK** - Eclipse Temurin (default), Azul Zulu, Amazon Corretto, BellSoft Liberica
-- **Maven** - Apache Maven (native implementation)
-- **Gradle** - Gradle Build Tool (native implementation)
-- **Go** - Go Programming Language (native implementation with separate GOPATH per version)
 - **Node.js** - Prebuilt tarballs from nodejs.org (sha256 verified, LTS-aware)
 - **Python** - Prebuilt CPython from `astral-sh/python-build-standalone` (sha256 verified)
+
+Additional tools shipped via the [candidate descriptor model](#candidates-descriptor-based-tools):
+
+- **Maven** - Apache Maven, Maven Central metadata (sha512)
+- **Gradle** - Gradle Build Tool, services.gradle.org (sha256)
+- **Go** - Go Programming Language with isolated per-version GOPATH (sha256)
+- **Kotlin** - JetBrains Kotlin compiler from GitHub releases (sha256)
+- **Scala** - Scala 3 compiler from `scala/scala3` GitHub releases (sha256)
+- **sbt** - Scala build tool from `sbt/sbt` GitHub releases (sha256)
+- **Ant** - Apache Ant from archive.apache.org (sha512)
+- **Terraform** - HashiCorp Terraform from releases.hashicorp.com (sha256)
+- **kubectl** - Kubernetes CLI from dl.k8s.io (sha256)
+- **Helm** - Kubernetes package manager from get.helm.sh (sha256)
+
+Run `dtm tools` for the live list (always reflects shipped + user descriptors).
 
 ## Installation
 
@@ -310,6 +322,102 @@ dtm available node 22
 dtm available python 3.13
 ```
 
+## Candidates (descriptor-based tools)
+
+Most tools ship as **candidates**: small key=value descriptor files under
+`modules/candidates/<name>.conf` that drive the generic engine in
+`modules/_engine.sh`. Adding a tool means writing a descriptor — no shell
+code. Each descriptor declares where to download from, how to verify the
+payload, where to find the version list, and where the binary lives inside
+the install dir. The engine then provides `pull` / `set` / `use` / `list` /
+`current` / `available` / `update` / `remove` for free.
+
+### Descriptor fields
+
+```bash
+# --- identity & filesystem layout ---
+candidate_name=<id>                     # matches filename (without .conf)
+candidate_home_var=<ENV_NAME>           # e.g. KOTLIN_HOME — exported on activation
+candidate_extra_vars="<VAR1> <VAR2>"    # additional vars pointing at home dir (e.g. M2_HOME)
+candidate_bin_subdir=bin                # subdir under home prepended to PATH
+candidate_binary_name=<file>            # executable filename (defaults to basename of binary_check)
+candidate_binary_check=bin/<binary>     # path proving a valid install (post-extract sanity check)
+
+# --- archive handling ---
+candidate_archive_format=<fmt>          # tar.gz | tgz | tar.xz | zip | binary
+candidate_archive_layout=<layout>       # nested        — single top-level dir, contents become install_dir
+                                        # flat          — extract directly into install_dir
+                                        # flat_to_bin   — single binary at archive root, install as bin/<name>
+                                        # nested_to_bin — single top-level dir w/ a binary, install just the binary
+                                        # binary        — auto when archive_format=binary
+
+# --- download URLs (templated with ${VERSION}, ${OS}, ${ARCH}, env vars) ---
+candidate_download_url='https://.../${VERSION}/foo-${VERSION}-${OS}-${ARCH}.tar.gz'
+candidate_checksum_url='https://.../${VERSION}/foo-${VERSION}-${OS}-${ARCH}.tar.gz.sha256'
+candidate_checksum_algo=sha256          # sha256 (default) | sha512 | sha1
+candidate_checksum_format=single        # single — file body is the bare hash
+                                        # multi  — lines `<hash>  <filename>`, grep by basename
+
+# --- per-platform URL aliases (keys: candidate_os_<dtm_os>, candidate_arch_<dtm_arch>) ---
+candidate_os_linux=linux                # default; override per tool
+candidate_os_mac=darwin
+candidate_arch_x64=amd64
+candidate_arch_aarch64=arm64
+
+# --- version listing strategy ---
+candidate_version_strategy=<name>       # github_releases | hashicorp_releases | maven_central |
+                                        # gradle_versions | go_dl | apache_dist
+candidate_version_strategy_arg=<arg>    # strategy-dependent (see table below)
+candidate_version_filter='<regex>'      # ERE applied to listed versions
+candidate_version_tag_prefix=v          # stripped from upstream tags (e.g. v, go)
+
+# --- post-install / workspace (advanced) ---
+candidate_post_install_fn=<fn>          # shell function called as: <fn> <install_dir> <version>
+candidate_workspace_var=GOPATH          # secondary env var pointing at a per-version sibling dir
+candidate_workspace_subdir=go-workspaces
+candidate_workspace_bin=bin             # prepended to PATH after bin_subdir
+candidate_workspace_init=src,pkg,bin    # subdirs created on pull
+```
+
+### Version strategies
+
+| Strategy             | Arg shape                                           | Example                                 |
+| -------------------- | --------------------------------------------------- | --------------------------------------- |
+| `github_releases`    | `<owner>/<repo>`                                    | `JetBrains/kotlin`                      |
+| `hashicorp_releases` | `<product>` (paginated via `?after=<timestamp>`)    | `terraform`                             |
+| `maven_central`      | `<artifact_path>`                                   | `org/apache/maven/apache-maven`         |
+| `gradle_versions`    | (ignored — uses `services.gradle.org/versions/all`) | —                                       |
+| `go_dl`              | (ignored — uses `go.dev/dl/?mode=json`)             | —                                       |
+| `apache_dist`        | `<dist_path>;<filename_prefix>;<filename_suffix>`   | `ant/binaries;apache-ant-;-bin.tar.gz`  |
+
+### User-defined candidates
+
+Drop a `*.conf` file in `~/.dtm/candidates/` (override via `DTM_USER_CANDIDATES`)
+to add a tool without forking dtm. User descriptors are loaded *after* shipped
+ones, so a same-named user file overrides the built-in. Run `dtm doctor` to
+confirm dtm sees them; `dtm tools` lists every registered candidate.
+
+### Example: kubectl as a single binary
+
+```bash
+# ~/.dtm/candidates/kubectl.conf
+candidate_name=kubectl
+candidate_home_var=KUBECTL_HOME
+candidate_binary_check=bin/kubectl
+candidate_archive_format=binary
+candidate_binary_name=kubectl
+candidate_download_url='https://dl.k8s.io/release/v${VERSION}/bin/${OS}/${ARCH}/kubectl'
+candidate_checksum_url='https://dl.k8s.io/release/v${VERSION}/bin/${OS}/${ARCH}/kubectl.sha256'
+candidate_os_linux=linux
+candidate_os_mac=darwin
+candidate_arch_x64=amd64
+candidate_arch_aarch64=arm64
+candidate_version_strategy=github_releases
+candidate_version_strategy_arg=kubernetes/kubernetes
+candidate_version_tag_prefix=v
+candidate_version_filter='^[0-9]+\.[0-9]+\.[0-9]+$'
+```
+
 ## Directory Structure
 
 By default, all tools are installed under `~/development/devtools/` (configurable via `DTM_HOME`):
@@ -410,6 +518,7 @@ caches, Adoptium / Maven / Gradle / Go mirrors) via these env vars:
 | `DTM_TEMURIN_API`  | `https://api.adoptium.net/v3`              | `dtm pull/available java` (Temurin) |
 | `DTM_MAVEN_REPO`   | `https://repo.maven.apache.org/maven2`     | `dtm available/update maven` (metadata) |
 | `DTM_MAVEN_DIST`   | `https://archive.apache.org/dist/maven`    | `dtm pull maven` (binaries + sha512) |
+| `DTM_APACHE_DIST`  | `https://archive.apache.org/dist`          | `apache_dist` strategy (e.g. `dtm pull/available ant`) |
 | `DTM_GRADLE_DIST`  | `https://services.gradle.org`              | `dtm pull/available gradle` |
 | `DTM_GO_DIST`      | `https://go.dev`                           | `dtm pull/available go` |
 | `DTM_GO_CHECKSUM`  | `https://dl.google.com/go`                 | `dtm pull go` (sha256 sidecars) |
@@ -417,6 +526,8 @@ caches, Adoptium / Maven / Gradle / Go mirrors) via these env vars:
 | `DTM_PBS_REPO`     | `https://api.github.com/repos/astral-sh/python-build-standalone` | `dtm available python` (release listing) |
 | `DTM_PBS_DIST`     | `https://github.com/astral-sh/python-build-standalone/releases/download` | `dtm pull python` (tarballs + sha256) |
 | `DTM_PBS_LATEST`   | `https://raw.githubusercontent.com/astral-sh/python-build-standalone/latest-release/latest-release.json` | `dtm pull/available python` (resolve latest tag) |
+| `DTM_USER_CANDIDATES` | `~/.dtm/candidates`                     | dir scanned for user-defined `*.conf` descriptors |
+| `DTM_HASHICORP_MAX_PAGES` | `25`                                | safety cap on `hashicorp_releases` pagination (20 results/page) |
 
 Persist them by adding to `~/.dtmconfig`:
 
@@ -564,7 +675,18 @@ dtm set gradle 8.5
 
 ## Contributing
 
-The modular structure makes it easy to add support for more tools. Each tool has its own module in the `modules/` directory implementing:
+**Preferred path: write a candidate descriptor.** Most new tools fit the
+generic engine — drop a `<name>.conf` under `modules/candidates/` (or
+`~/.dtm/candidates/` for personal tools) following the
+[descriptor format](#descriptor-fields). No shell code, full feature parity
+(pull/set/use/list/current/available/update/remove, JSON, `.tool-versions`,
+doctor coverage). If the upstream uses a new release listing scheme, add a
+`strategy_<name>_list` function in `modules/_engine.sh` and reference it from
+`candidate_version_strategy`.
+
+**Legacy per-tool modules** (`modules/{java,node,python}.sh`) only exist for
+tools whose distribution model doesn't fit the descriptor (multi-distribution
+Java; LTS-aware Node; PBS-flavored Python). Each implements:
 
 - `pull_<tool>` - Download and install
 - `set_<tool>` - Activate version

@@ -30,9 +30,10 @@
 #   os_linux, os_mac        Per-candidate alias for ${OS}. Defaults to dtm's OS (linux|mac).
 #   arch_x64, arch_aarch64  Per-candidate alias for ${ARCH}. Defaults to dtm's ARCH (x64|aarch64).
 #   version_strategy        Named strategy: github_releases | hashicorp_releases |
-#                           maven_central | gradle_versions | go_dl.
+#                           maven_central | gradle_versions | go_dl | apache_dist.
 #   version_strategy_arg    Strategy-specific arg (e.g. "owner/repo", "terraform",
-#                           Maven artifact path).
+#                           Maven artifact path, "<dir>;<prefix>;<suffix>" for
+#                           apache_dist).
 #   version_filter          Regex applied to listed versions.
 #   version_tag_prefix      Prefix stripped from upstream tag names (e.g. v, go).
 #   post_install_fn         Optional shell function called as: <fn> <install_dir> <version>.
@@ -202,16 +203,34 @@ strategy_github_releases_list() {
 }
 
 # HashiCorp releases API: https://api.releases.hashicorp.com/v1/releases/<product>?limit=20
-# The API caps `limit` at 20, so this returns the 20 most recent releases.
-# (Older versions would need pagination via `?after=<version>`.)
+# The API caps `limit` at 20, so we paginate using `?after=<timestamp_created>`
+# from the oldest item of the previous page until the page returns fewer than
+# 20 entries. Pages are bounded by DTM_HASHICORP_MAX_PAGES (default 25) so a
+# misbehaving server can't trigger an unbounded loop.
 strategy_hashicorp_releases_list() {
     local product="$1"
-    local response
-    response=$(curl -fsSL --retry 3 --retry-delay 2 \
-        "https://api.releases.hashicorp.com/v1/releases/${product}?limit=20" 2>/dev/null) || return 1
-    local versions
-    versions=$(echo "$response" | jq -r '.[] | select(.is_prerelease==false) | .version' 2>/dev/null) || return 1
-    candidate_filter_versions "$versions"
+    local max_pages="${DTM_HASHICORP_MAX_PAGES:-25}"
+    local base="https://api.releases.hashicorp.com/v1/releases/${product}?limit=20"
+    local after="" page=0 response page_versions all_versions="" count last_ts
+    while (( page < max_pages )); do
+        local url="$base"
+        [[ -n "$after" ]] && url="${base}&after=${after}"
+        response=$(curl -fsSL --retry 3 --retry-delay 2 "$url" 2>/dev/null) || return 1
+        count=$(echo "$response" | jq 'length' 2>/dev/null) || return 1
+        [[ "$count" == "0" ]] && break
+        page_versions=$(echo "$response" | jq -r '.[] | select(.is_prerelease==false) | .version' 2>/dev/null) || return 1
+        if [[ -z "$all_versions" ]]; then
+            all_versions="$page_versions"
+        else
+            all_versions="${all_versions}"$'\n'"${page_versions}"
+        fi
+        (( count < 20 )) && break
+        last_ts=$(echo "$response" | jq -r '.[-1].timestamp_created' 2>/dev/null) || return 1
+        [[ -z "$last_ts" || "$last_ts" == "null" ]] && break
+        after="$last_ts"
+        page=$((page+1))
+    done
+    candidate_filter_versions "$all_versions"
 }
 
 # Maven Central metadata XML: lists every published version of an artifact.
@@ -240,6 +259,34 @@ strategy_gradle_versions_list() {
     versions=$(echo "$response" | jq -r \
         '.[] | select(.snapshot==false and .nightly==false and .broken==false and .rcFor=="" and .milestoneFor=="") | .version' \
         2>/dev/null) || return 1
+    candidate_filter_versions "$versions"
+}
+
+# Apache dist directory listing. Walks the Apache archive HTML index and
+# extracts version substrings from filenames. Strategy arg has the form
+#   <relative_path>;<filename_prefix>;<filename_suffix>
+# Example for ant:
+#   ant/binaries;apache-ant-;-bin.tar.gz
+# `.` characters in prefix/suffix are escaped before matching. Versions are
+# substrings between prefix and suffix on each href in the listing. Override
+# the host via DTM_APACHE_DIST (defaults to https://archive.apache.org/dist).
+strategy_apache_dist_list() {
+    local arg="$1"
+    local path prefix suffix
+    IFS=';' read -r path prefix suffix <<< "$arg"
+    if [[ -z "$path" || -z "$prefix" || -z "$suffix" ]]; then
+        log_error "apache_dist arg must be '<path>;<prefix>;<suffix>'" >&2
+        return 1
+    fi
+    local response
+    response=$(curl -fsSL --retry 3 --retry-delay 2 \
+        "${DTM_APACHE_DIST}/${path}/" 2>/dev/null) || return 1
+    local pre_re="${prefix//./\\.}"
+    local suf_re="${suffix//./\\.}"
+    local versions
+    versions=$(echo "$response" \
+        | grep -oE "href=\"${pre_re}[^\"]+${suf_re}\"" \
+        | sed -e "s|href=\"${prefix}||" -e "s|${suffix}\"\$||")
     candidate_filter_versions "$versions"
 }
 
@@ -277,6 +324,7 @@ candidate_list_versions() {
         maven_central)      strategy_maven_central_list      "$candidate_version_strategy_arg" ;;
         gradle_versions)    strategy_gradle_versions_list ;;
         go_dl)              strategy_go_dl_list ;;
+        apache_dist)        strategy_apache_dist_list        "$candidate_version_strategy_arg" ;;
         *) log_error "Unknown version strategy: $candidate_version_strategy" >&2; return 1 ;;
     esac
 }

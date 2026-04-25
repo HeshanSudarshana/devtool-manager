@@ -31,6 +31,7 @@ set -e
 # Priority: 1. DTM_HOME env var, 2. Value in ~/.dtmconfig, 3. Default
 DTM_CONFIG="${HOME}/.dtmrc"
 DTM_SETTINGS="${HOME}/.dtmconfig"
+DTM_USER_CANDIDATES="${DTM_USER_CANDIDATES:-${HOME}/.dtm/candidates}"
 
 # Source ~/.dtmconfig unconditionally so persisted mirror/proxy overrides
 # apply even when DTM_HOME is already set in env. Env DTM_HOME still wins
@@ -56,6 +57,7 @@ mkdir -p "$DTM_ROOT"
 : "${DTM_TEMURIN_API:=https://api.adoptium.net/v3}"
 : "${DTM_MAVEN_REPO:=https://repo.maven.apache.org/maven2}"
 : "${DTM_MAVEN_DIST:=https://archive.apache.org/dist/maven}"
+: "${DTM_APACHE_DIST:=https://archive.apache.org/dist}"
 : "${DTM_GRADLE_DIST:=https://services.gradle.org}"
 : "${DTM_GO_DIST:=https://go.dev}"
 : "${DTM_GO_CHECKSUM:=https://dl.google.com/go}"
@@ -63,7 +65,7 @@ mkdir -p "$DTM_ROOT"
 : "${DTM_PBS_REPO:=https://api.github.com/repos/astral-sh/python-build-standalone}"
 : "${DTM_PBS_DIST:=https://github.com/astral-sh/python-build-standalone/releases/download}"
 : "${DTM_PBS_LATEST:=https://raw.githubusercontent.com/astral-sh/python-build-standalone/latest-release/latest-release.json}"
-export DTM_TEMURIN_API DTM_MAVEN_REPO DTM_MAVEN_DIST \
+export DTM_TEMURIN_API DTM_MAVEN_REPO DTM_MAVEN_DIST DTM_APACHE_DIST \
        DTM_GRADLE_DIST DTM_GO_DIST DTM_GO_CHECKSUM DTM_NODE_DIST \
        DTM_PBS_REPO DTM_PBS_DIST DTM_PBS_LATEST
 
@@ -363,11 +365,17 @@ Usage:
 
 Supported tools:
   java    - JDK (Eclipse Temurin default; also zulu, corretto, liberica)
-  maven   - Apache Maven
-  gradle  - Gradle Build Tool
-  go      - Go Programming Language
   node    - Node.js (prebuilt from nodejs.org)
   python  - Python (prebuilt from python-build-standalone)
+
+  Candidate-driven (modules/candidates/<name>.conf):
+  maven, gradle, go, kotlin, scala, sbt, ant, terraform, kubectl, helm
+
+Run 'dtm tools' for the live list (shipped + user-defined).
+
+Add your own tools by dropping a *.conf descriptor in ~/.dtm/candidates/
+(override path with DTM_USER_CANDIDATES). See the README "Candidates"
+section for the descriptor format.
 
 Java distribution spec: <dist>@<version>, or bare <version> for temurin.
 Supported dists: temurin (default), zulu, corretto, liberica.
@@ -448,7 +456,9 @@ source_modules() {
         source "${script_dir}/modules/python.sh"
     fi
 
-    # Generic candidate engine + descriptor discovery.
+    # Generic candidate engine + descriptor discovery. Built-ins load first,
+    # then user descriptors at $DTM_USER_CANDIDATES override by name (last
+    # write wins) so users can patch a shipped descriptor without forking dtm.
     if [[ -f "${script_dir}/modules/_engine.sh" ]]; then
         source "${script_dir}/modules/_engine.sh"
         local cf cname
@@ -457,6 +467,13 @@ source_modules() {
             cname="$(basename "$cf" .conf)"
             DTM_CANDIDATE_FILES["$cname"]="$cf"
         done
+        if [[ -d "$DTM_USER_CANDIDATES" ]]; then
+            for cf in "$DTM_USER_CANDIDATES"/*.conf; do
+                [[ -f "$cf" ]] || continue
+                cname="$(basename "$cf" .conf)"
+                DTM_CANDIDATE_FILES["$cname"]="$cf"
+            done
+        fi
     fi
 }
 
@@ -515,6 +532,15 @@ doctor_command() {
         fi
     else
         log_info "  not present (no global pins)"
+    fi
+
+    log_info "[candidates] user dir: $DTM_USER_CANDIDATES"
+    if [[ -d "$DTM_USER_CANDIDATES" ]]; then
+        local _user_count
+        _user_count=$(find "$DTM_USER_CANDIDATES" -maxdepth 1 -name '*.conf' -type f 2>/dev/null | wc -l | tr -d ' ')
+        log_success "  $_user_count user-defined descriptor(s)"
+    else
+        log_info "  not present (drop *.conf files here to add tools)"
     fi
 
     log_warn "[wrapper] cannot verify dtm.sh is sourced from inside dtm; ensure your shell rc sources dtm.sh"
