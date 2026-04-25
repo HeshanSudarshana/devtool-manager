@@ -98,7 +98,22 @@ pull_gradle() {
         rm -rf "$temp_dir"
         exit 1
     fi
-    
+
+    log_info "Fetching checksum..."
+    local expected_checksum
+    expected_checksum=$(fetch_checksum_from_url "${download_url}.sha256")
+    if [[ -z "$expected_checksum" ]]; then
+        log_error "Failed to fetch checksum from ${download_url}.sha256"
+        rm -rf "$temp_dir"
+        exit 1
+    fi
+
+    log_info "Verifying checksum (sha256)..."
+    if ! verify_checksum "$download_file" "$expected_checksum" sha256; then
+        rm -rf "$temp_dir"
+        exit 1
+    fi
+
     log_info "Extracting Gradle to $install_dir..."
     
     # Extract zip file

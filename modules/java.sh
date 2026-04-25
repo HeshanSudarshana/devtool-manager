@@ -24,37 +24,44 @@ get_latest_java_version() {
     echo "$version"
 }
 
-# Build download URL for Temurin JDK
-get_java_download_url() {
+# Build download URL and checksum for Temurin JDK.
+# Outputs two lines: download_url, sha256 checksum
+get_java_download_info() {
     local version="$1"
     local major_version=$(echo "$version" | cut -d'.' -f1)
-    
+
     # Determine OS suffix
     local os_suffix
     case "$OS" in
         linux) os_suffix="linux" ;;
         mac) os_suffix="mac" ;;
     esac
-    
+
     # Build API query URL - try specific version first
     local api_url="https://api.adoptium.net/v3/assets/version/jdk-${version}"
     local response=$(curl -s "${api_url}?architecture=${ARCH}&image_type=jdk&os=${os_suffix}")
-    
+
     if [[ -z "$response" || "$response" == "[]" ]]; then
         # Try with latest for major version
         api_url="https://api.adoptium.net/v3/assets/latest/${major_version}/hotspot"
         response=$(curl -s "${api_url}?architecture=${ARCH}&image_type=jdk&os=${os_suffix}")
     fi
-    
-    # Extract download URL using Python
-    local download_url=$(echo "$response" | python3 -c "import sys, json; data = json.load(sys.stdin); print(data[0]['binary']['package']['link'])" 2>/dev/null)
-    
-    if [[ -z "$download_url" ]]; then
-        log_error "Could not find download URL for Java $version (OS: $os_suffix, ARCH: $ARCH)" >&2
+
+    # Extract download URL and checksum using Python
+    local info=$(echo "$response" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+pkg = data[0]['binary']['package']
+print(pkg['link'])
+print(pkg['checksum'])
+" 2>/dev/null)
+
+    if [[ -z "$info" ]]; then
+        log_error "Could not find download URL/checksum for Java $version (OS: $os_suffix, ARCH: $ARCH)" >&2
         return 1
     fi
-    
-    echo "$download_url"
+
+    echo "$info"
 }
 
 # Pull (download and install) Java JDK
@@ -92,25 +99,34 @@ pull_java() {
         rm -rf "$install_dir"
     fi
     
-    # Get download URL
-    local download_url=$(get_java_download_url "$exact_version")
+    # Get download URL and checksum
+    local download_info
+    download_info=$(get_java_download_info "$exact_version")
     if [[ $? -ne 0 ]]; then
         exit 1
     fi
-    
+    local download_url=$(echo "$download_info" | sed -n '1p')
+    local expected_checksum=$(echo "$download_info" | sed -n '2p')
+
     log_info "Downloading JDK from: $download_url"
-    
+
     # Create temp directory for download
     local temp_dir=$(mktemp -d)
     local download_file="${temp_dir}/jdk.tar.gz"
-    
+
     # Download with progress
     if ! curl -L --progress-bar -o "$download_file" "$download_url"; then
         log_error "Download failed"
         rm -rf "$temp_dir"
         exit 1
     fi
-    
+
+    log_info "Verifying checksum (sha256)..."
+    if ! verify_checksum "$download_file" "$expected_checksum" sha256; then
+        rm -rf "$temp_dir"
+        exit 1
+    fi
+
     log_info "Extracting JDK to $install_dir..."
     
     # Extract tarball

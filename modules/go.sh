@@ -117,7 +117,24 @@ pull_go() {
         rm -rf "$temp_dir"
         exit 1
     fi
-    
+
+    log_info "Fetching checksum..."
+    # Go publishes sha256 at dl.google.com, not go.dev (where the URL is HTML)
+    local checksum_url="${download_url/https:\/\/go.dev\/dl\//https://dl.google.com/go/}.sha256"
+    local expected_checksum
+    expected_checksum=$(fetch_checksum_from_url "$checksum_url")
+    if [[ -z "$expected_checksum" ]]; then
+        log_error "Failed to fetch checksum from $checksum_url"
+        rm -rf "$temp_dir"
+        exit 1
+    fi
+
+    log_info "Verifying checksum (sha256)..."
+    if ! verify_checksum "$download_file" "$expected_checksum" sha256; then
+        rm -rf "$temp_dir"
+        exit 1
+    fi
+
     log_info "Extracting Go to $install_dir..."
     
     # Extract tarball

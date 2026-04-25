@@ -51,6 +51,72 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# Fetch a checksum from a sidecar URL (.sha256, .sha512, etc).
+# Returns just the hex hash (first whitespace-separated token).
+fetch_checksum_from_url() {
+    local url="$1"
+    local content
+    content=$(curl -sL --fail "$url" 2>/dev/null) || return 1
+    if [[ -z "$content" ]]; then
+        return 1
+    fi
+    echo "$content" | head -1 | awk '{print $1}'
+}
+
+# Verify a file's checksum.
+# Usage: verify_checksum <file> <expected_hash> [algo]
+# algo: sha256 (default) or sha512
+verify_checksum() {
+    local file="$1"
+    local expected="$2"
+    local algo="${3:-sha256}"
+    local actual=""
+
+    if [[ -z "$expected" ]]; then
+        log_error "Expected checksum is empty"
+        return 1
+    fi
+
+    case "$algo" in
+        sha256)
+            if command -v sha256sum >/dev/null 2>&1; then
+                actual=$(sha256sum "$file" | awk '{print $1}')
+            elif command -v shasum >/dev/null 2>&1; then
+                actual=$(shasum -a 256 "$file" | awk '{print $1}')
+            else
+                log_error "No SHA-256 tool available (install coreutils or shasum)"
+                return 1
+            fi
+            ;;
+        sha512)
+            if command -v sha512sum >/dev/null 2>&1; then
+                actual=$(sha512sum "$file" | awk '{print $1}')
+            elif command -v shasum >/dev/null 2>&1; then
+                actual=$(shasum -a 512 "$file" | awk '{print $1}')
+            else
+                log_error "No SHA-512 tool available (install coreutils or shasum)"
+                return 1
+            fi
+            ;;
+        *)
+            log_error "Unsupported checksum algorithm: $algo"
+            return 1
+            ;;
+    esac
+
+    expected=$(echo "$expected" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+    actual=$(echo "$actual" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+
+    if [[ "$actual" != "$expected" ]]; then
+        log_error "Checksum mismatch"
+        log_error "  Expected: $expected"
+        log_error "  Actual:   $actual"
+        return 1
+    fi
+
+    return 0
+}
+
 # Show usage
 show_usage() {
     cat << EOF
