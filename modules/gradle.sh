@@ -214,6 +214,24 @@ list_gradle() {
     done
 }
 
+# Print currently active Gradle version (or fail if none)
+current_gradle() {
+    local current_gradle_home="${GRADLE_HOME:-}"
+    if [[ -z "$current_gradle_home" ]]; then
+        log_warn "No active Gradle version (GRADLE_HOME not set)" >&2
+        return 1
+    fi
+    if [[ "$current_gradle_home" != "$GRADLE_ROOT"/* ]]; then
+        log_warn "Active GRADLE_HOME is not managed by dtm: $current_gradle_home" >&2
+        return 1
+    fi
+    if [[ ! -x "$current_gradle_home/bin/gradle" ]]; then
+        log_warn "Active Gradle install is missing: $current_gradle_home" >&2
+        return 1
+    fi
+    basename "$current_gradle_home"
+}
+
 # Remove Gradle version
 remove_gradle() {
     local version="$1"

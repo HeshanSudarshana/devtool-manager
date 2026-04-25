@@ -5,6 +5,7 @@
 #   dtm pull <tool> <version>    - Download and install a tool version
 #   dtm set <tool> <version>     - Set PATH and environment variables for a tool version
 #   dtm list <tool>              - List installed versions
+#   dtm current <tool>           - Print the active version of a tool
 #   dtm remove <tool> <version>  - Remove an installed version
 #   dtm config home [path]       - Get or set the DTM_HOME directory
 
@@ -227,6 +228,7 @@ Usage:
   dtm pull <tool> <version>       Download and install a tool version
   dtm set <tool> <version>        Set PATH and environment for a tool
   dtm list <tool>                 List installed versions
+  dtm current <tool>              Print the active version of a tool
   dtm remove <tool> <version>     Remove an installed version
   dtm config home [path]          Get or set the DTM_HOME directory
 
@@ -243,6 +245,7 @@ Examples:
   dtm pull java 11.0.29         Pull specific Java 11.0.29
   dtm set java 11               Set Java 11 as active
   dtm list java                 List installed Java versions
+  dtm current java              Show active Java version
   dtm config home               Show current DTM_HOME path
   dtm config home /custom/path  Set DTM_HOME to /custom/path
 EOF
@@ -425,6 +428,17 @@ main() {
                 go) list_go ;;
                 node) list_node ;;
                 python) list_python ;;
+                *) log_error "Unknown tool: $tool"; exit 1 ;;
+            esac
+            ;;
+        current)
+            case "$tool" in
+                java) current_java ;;
+                maven) current_maven ;;
+                gradle) current_gradle ;;
+                go) current_go ;;
+                node) current_node ;;
+                python) current_python ;;
                 *) log_error "Unknown tool: $tool"; exit 1 ;;
             esac
             ;;

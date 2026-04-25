@@ -206,6 +206,23 @@ list_python() {
     echo "  dtm pull python 3.10.13   # Latest Python 3.10"
 }
 
+# Print currently active Python version (or fail if none)
+current_python() {
+    if ! ensure_pyenv; then
+        return 1
+    fi
+
+    local current
+    current=$(pyenv version-name 2>/dev/null)
+
+    if [[ -z "$current" || "$current" == "system" ]]; then
+        log_warn "No active Python version managed by pyenv (pyenv version-name: ${current:-empty})" >&2
+        return 1
+    fi
+
+    echo "$current"
+}
+
 # Remove Python version using pyenv
 remove_python() {
     local version="$1"

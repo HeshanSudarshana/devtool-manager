@@ -153,6 +153,24 @@ list_node() {
     echo "  nvm ls-remote"
 }
 
+# Print currently active Node.js version (or fail if none)
+current_node() {
+    if ! ensure_nvm; then
+        return 1
+    fi
+
+    local current
+    current=$(nvm current 2>/dev/null)
+
+    if [[ -z "$current" || "$current" == "none" || "$current" == "system" ]]; then
+        log_warn "No active Node.js version managed by nvm (nvm current: ${current:-empty})" >&2
+        return 1
+    fi
+
+    # Strip leading "v" so output matches `dtm pull node <version>` input
+    echo "${current#v}"
+}
+
 # Remove Node.js version using nvm
 remove_node() {
     local version="$1"

@@ -245,6 +245,24 @@ list_go() {
     done
 }
 
+# Print currently active Go version (or fail if none)
+current_go() {
+    local current_goroot="${GOROOT:-}"
+    if [[ -z "$current_goroot" ]]; then
+        log_warn "No active Go version (GOROOT not set)" >&2
+        return 1
+    fi
+    if [[ "$current_goroot" != "$GO_ROOT"/* ]]; then
+        log_warn "Active GOROOT is not managed by dtm: $current_goroot" >&2
+        return 1
+    fi
+    if [[ ! -x "$current_goroot/bin/go" ]]; then
+        log_warn "Active Go install is missing: $current_goroot" >&2
+        return 1
+    fi
+    basename "$current_goroot"
+}
+
 # Remove Go version
 remove_go() {
     local version="$1"

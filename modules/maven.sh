@@ -196,6 +196,24 @@ list_maven() {
     done
 }
 
+# Print currently active Maven version (or fail if none)
+current_maven() {
+    local current_maven_home="${MAVEN_HOME:-}"
+    if [[ -z "$current_maven_home" ]]; then
+        log_warn "No active Maven version (MAVEN_HOME not set)" >&2
+        return 1
+    fi
+    if [[ "$current_maven_home" != "$MAVEN_ROOT"/* ]]; then
+        log_warn "Active MAVEN_HOME is not managed by dtm: $current_maven_home" >&2
+        return 1
+    fi
+    if [[ ! -x "$current_maven_home/bin/mvn" ]]; then
+        log_warn "Active Maven install is missing: $current_maven_home" >&2
+        return 1
+    fi
+    basename "$current_maven_home"
+}
+
 # Remove Maven version
 remove_maven() {
     local version="$1"

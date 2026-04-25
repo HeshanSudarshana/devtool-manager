@@ -217,6 +217,24 @@ list_java() {
     done
 }
 
+# Print currently active Java version (or fail if none)
+current_java() {
+    local current_java_home="${JAVA_HOME:-}"
+    if [[ -z "$current_java_home" ]]; then
+        log_warn "No active Java version (JAVA_HOME not set)" >&2
+        return 1
+    fi
+    if [[ "$current_java_home" != "$JAVA_ROOT"/* ]]; then
+        log_warn "Active JAVA_HOME is not managed by dtm: $current_java_home" >&2
+        return 1
+    fi
+    if [[ ! -x "$current_java_home/bin/java" ]]; then
+        log_warn "Active Java install is missing: $current_java_home" >&2
+        return 1
+    fi
+    basename "$current_java_home"
+}
+
 # Remove Java version
 remove_java() {
     local version="$1"
