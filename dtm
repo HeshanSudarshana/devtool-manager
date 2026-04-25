@@ -65,9 +65,10 @@ mkdir -p "$DTM_ROOT"
 : "${DTM_PBS_REPO:=https://api.github.com/repos/astral-sh/python-build-standalone}"
 : "${DTM_PBS_DIST:=https://github.com/astral-sh/python-build-standalone/releases/download}"
 : "${DTM_PBS_LATEST:=https://raw.githubusercontent.com/astral-sh/python-build-standalone/latest-release/latest-release.json}"
+: "${DTM_DOCKER_DIST:=https://download.docker.com}"
 export DTM_TEMURIN_API DTM_MAVEN_REPO DTM_MAVEN_DIST DTM_APACHE_DIST \
        DTM_GRADLE_DIST DTM_GO_DIST DTM_GO_CHECKSUM DTM_NODE_DIST \
-       DTM_PBS_REPO DTM_PBS_DIST DTM_PBS_LATEST
+       DTM_PBS_REPO DTM_PBS_DIST DTM_PBS_LATEST DTM_DOCKER_DIST
 
 # Colors for output. Disabled when NO_COLOR is set (https://no-color.org) or
 # when the relevant stream is not a TTY. Errors/warnings always go to stderr,

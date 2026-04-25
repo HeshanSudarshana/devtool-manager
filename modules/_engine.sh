@@ -30,10 +30,11 @@
 #   os_linux, os_mac        Per-candidate alias for ${OS}. Defaults to dtm's OS (linux|mac).
 #   arch_x64, arch_aarch64  Per-candidate alias for ${ARCH}. Defaults to dtm's ARCH (x64|aarch64).
 #   version_strategy        Named strategy: github_releases | hashicorp_releases |
-#                           maven_central | gradle_versions | go_dl | apache_dist.
+#                           maven_central | gradle_versions | go_dl | apache_dist |
+#                           dir_index.
 #   version_strategy_arg    Strategy-specific arg (e.g. "owner/repo", "terraform",
 #                           Maven artifact path, "<dir>;<prefix>;<suffix>" for
-#                           apache_dist).
+#                           apache_dist, "<url>;<prefix>;<suffix>" for dir_index).
 #   version_filter          Regex applied to listed versions.
 #   version_tag_prefix      Prefix stripped from upstream tag names (e.g. v, go).
 #   post_install_fn         Optional shell function called as: <fn> <install_dir> <version>.
@@ -268,6 +269,29 @@ strategy_gradle_versions_list() {
     candidate_filter_versions "$versions"
 }
 
+# Generic HTML directory index. Strategy arg is `<base_url>;<prefix>;<suffix>`.
+# Walks the listing, picks hrefs of the form <prefix>VERSION<suffix>, and emits
+# VERSION per line. Use this for vendors that publish a static HTML index of
+# release files but don't fit `apache_dist`'s host shape (e.g. download.docker.com).
+strategy_dir_index_list() {
+    local arg="$1"
+    local url prefix suffix
+    IFS=';' read -r url prefix suffix <<< "$arg"
+    if [[ -z "$url" || -z "$prefix" || -z "$suffix" ]]; then
+        log_error "dir_index arg must be '<url>;<prefix>;<suffix>'" >&2
+        return 1
+    fi
+    local response
+    response=$(curl -fsSL --retry 3 --retry-delay 2 "$url" 2>/dev/null) || return 1
+    local pre_re="${prefix//./\\.}"
+    local suf_re="${suffix//./\\.}"
+    local versions
+    versions=$(echo "$response" \
+        | grep -oE "href=\"${pre_re}[^\"]+${suf_re}\"" \
+        | sed -e "s|href=\"${prefix}||" -e "s|${suffix}\"\$||")
+    candidate_filter_versions "$versions"
+}
+
 # Apache dist directory listing. Walks the Apache archive HTML index and
 # extracts version substrings from filenames. Strategy arg has the form
 #   <relative_path>;<filename_prefix>;<filename_suffix>
@@ -333,6 +357,7 @@ candidate_list_versions() {
         gradle_versions)    strategy_gradle_versions_list ;;
         go_dl)              strategy_go_dl_list ;;
         apache_dist)        strategy_apache_dist_list        "$candidate_version_strategy_arg" ;;
+        dir_index)          strategy_dir_index_list          "$candidate_version_strategy_arg" ;;
         *) log_error "Unknown version strategy: $candidate_version_strategy" >&2; return 1 ;;
     esac
 }
