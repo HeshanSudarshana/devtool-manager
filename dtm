@@ -60,8 +60,12 @@ mkdir -p "$DTM_ROOT"
 : "${DTM_GO_DIST:=https://go.dev}"
 : "${DTM_GO_CHECKSUM:=https://dl.google.com/go}"
 : "${DTM_NODE_DIST:=https://nodejs.org/dist}"
+: "${DTM_PBS_REPO:=https://api.github.com/repos/astral-sh/python-build-standalone}"
+: "${DTM_PBS_DIST:=https://github.com/astral-sh/python-build-standalone/releases/download}"
+: "${DTM_PBS_LATEST:=https://raw.githubusercontent.com/astral-sh/python-build-standalone/latest-release/latest-release.json}"
 export DTM_TEMURIN_API DTM_MAVEN_REPO DTM_MAVEN_DIST \
-       DTM_GRADLE_DIST DTM_GO_DIST DTM_GO_CHECKSUM DTM_NODE_DIST
+       DTM_GRADLE_DIST DTM_GO_DIST DTM_GO_CHECKSUM DTM_NODE_DIST \
+       DTM_PBS_REPO DTM_PBS_DIST DTM_PBS_LATEST
 
 # Colors for output. Disabled when NO_COLOR is set (https://no-color.org) or
 # when the relevant stream is not a TTY. Errors/warnings always go to stderr,
@@ -363,7 +367,7 @@ Supported tools:
   gradle  - Gradle Build Tool
   go      - Go Programming Language
   node    - Node.js (prebuilt from nodejs.org)
-  python  - Python (via pyenv)
+  python  - Python (prebuilt from python-build-standalone)
 
 Java distribution spec: <dist>@<version>, or bare <version> for temurin.
 Supported dists: temurin (default), zulu, corretto, liberica.
@@ -387,6 +391,9 @@ Examples:
   dtm pull node lts             Pull latest Node LTS
   dtm available node            List Node majors with LTS marker
   dtm available node 22         List all Node 22 patches
+  dtm pull python 3.12          Pull latest Python 3.12 (PBS install_only)
+  dtm available python          List CPython versions in latest PBS release
+  dtm available python 3.13     List Python 3.13.x patches in latest PBS release
   dtm update java               Bump active Java to latest patch (preserves dist)
   dtm doctor                    Diagnose dtm install (deps, PATH, broken installs)
   dtm self-update               Pull latest dtm from its git remote
@@ -516,13 +523,14 @@ doctor_command() {
     _doctor_problem warn "cannot verify dtm.sh is sourced"
 
     local tool var_name tool_root bin_rel val resolved
-    for tool in java maven gradle go node; do
+    for tool in java maven gradle go node python; do
         case "$tool" in
             java)   var_name=JAVA_HOME;   tool_root="${DTM_ROOT}/java";   bin_rel=bin/java ;;
             maven)  var_name=MAVEN_HOME;  tool_root="${DTM_ROOT}/maven";  bin_rel=bin/mvn ;;
             gradle) var_name=GRADLE_HOME; tool_root="${DTM_ROOT}/gradle"; bin_rel=bin/gradle ;;
             go)     var_name=GOROOT;      tool_root="${DTM_ROOT}/go";     bin_rel=bin/go ;;
             node)   var_name=NODE_HOME;   tool_root="${DTM_ROOT}/node";   bin_rel=bin/node ;;
+            python) var_name=PYTHON_HOME; tool_root="${DTM_ROOT}/python"; bin_rel=bin/python3 ;;
         esac
         log_info "[$tool]"
 
@@ -660,10 +668,14 @@ doctor_command() {
         [DTM_GO_DIST]="https://go.dev"
         [DTM_GO_CHECKSUM]="https://dl.google.com/go"
         [DTM_NODE_DIST]="https://nodejs.org/dist"
+        [DTM_PBS_REPO]="https://api.github.com/repos/astral-sh/python-build-standalone"
+        [DTM_PBS_DIST]="https://github.com/astral-sh/python-build-standalone/releases/download"
+        [DTM_PBS_LATEST]="https://raw.githubusercontent.com/astral-sh/python-build-standalone/latest-release/latest-release.json"
     )
     local -a _mirror_order=(DTM_TEMURIN_API DTM_MAVEN_REPO DTM_MAVEN_DIST \
                             DTM_GRADLE_DIST DTM_GO_DIST DTM_GO_CHECKSUM \
-                            DTM_NODE_DIST)
+                            DTM_NODE_DIST DTM_PBS_REPO DTM_PBS_DIST \
+                            DTM_PBS_LATEST)
     local mvar mval mdef
     for mvar in "${_mirror_order[@]}"; do
         mval="${!mvar}"
@@ -1082,11 +1094,7 @@ main() {
                 gradle) available_gradle "$version" ;;
                 go) available_go "$version" ;;
                 node) available_node "$version" ;;
-                python)
-                    log_error "'available' is not supported for $tool"
-                    log_info "Use the upstream tool: 'pyenv install --list' for python"
-                    exit 1
-                    ;;
+                python) available_python "$version" ;;
                 *) log_error "Unknown tool: $tool"; exit 1 ;;
             esac
             ;;

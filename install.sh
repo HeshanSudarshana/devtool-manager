@@ -171,69 +171,9 @@ echo ""
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  Optional: Install Python manager"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
-echo "dtm can manage Python using pyenv. Node.js is managed natively"
-echo "(prebuilt tarballs from nodejs.org) — no third-party manager required."
-echo ""
-
-# Check for pyenv
-if ! command -v pyenv &> /dev/null && [ ! -s "$HOME/.pyenv/bin/pyenv" ]; then
-    if confirm "Install pyenv for Python management? (y/N): "; then
-        echo ""
-        echo "Installing pyenv and build dependencies..."
-        echo "Note: Unlike Node.js (pre-built binaries), Python must be compiled from source."
-        echo "Build tools and libraries are needed to compile Python successfully."
-        echo "This may require sudo password."
-        echo ""
-
-        # Detect OS and install dependencies
-        if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-            if command -v pacman &> /dev/null; then
-                echo "Detected Arch Linux - installing build dependencies..."
-                sudo pacman -S --needed --noconfirm base-devel openssl zlib xz tk
-            elif command -v apt-get &> /dev/null; then
-                echo "Detected Debian/Ubuntu - installing build dependencies..."
-                sudo apt-get update
-                sudo apt-get install -y make build-essential libssl-dev zlib1g-dev \
-                    libbz2-dev libreadline-dev libsqlite3-dev wget curl llvm \
-                    libncursesw5-dev xz-utils tk-dev libxml2-dev libxmlsec1-dev \
-                    libffi-dev liblzma-dev
-            elif command -v yum &> /dev/null; then
-                echo "Detected RHEL/CentOS/Fedora - installing build dependencies..."
-                sudo yum install -y gcc zlib-devel bzip2 bzip2-devel readline-devel \
-                    sqlite sqlite-devel openssl-devel tk-devel libffi-devel xz-devel
-            else
-                echo "Unknown Linux distribution. Please install build dependencies manually."
-                echo "Visit: https://github.com/pyenv/pyenv/wiki#suggested-build-environment"
-            fi
-        elif [[ "$OSTYPE" == "darwin"* ]]; then
-            echo "On macOS, make sure Xcode Command Line Tools are installed"
-            echo "Run: xcode-select --install (if not already installed)"
-        fi
-
-        # Install pyenv
-        if curl https://pyenv.run | bash; then
-            echo "✓ pyenv installed successfully"
-            echo ""
-            echo "Add these to your $SHELL_RC:"
-            echo "  export PYENV_ROOT=\"\$HOME/.pyenv\""
-            echo "  export PATH=\"\$PYENV_ROOT/bin:\$PATH\""
-            echo "  eval \"\$(pyenv init -)\""
-        else
-            echo "✗ Failed to install pyenv"
-        fi
-    fi
-else
-    echo "✓ pyenv is already installed"
-fi
-
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 echo "Installation complete! Try these commands:"
 echo "  dtm pull java 11      # Native Java management"
 echo "  dtm pull go 1.21      # Native Go management"
 echo "  dtm pull node lts     # Native Node management"
-echo "  dtm pull python 3.12  # Via pyenv"
+echo "  dtm pull python 3.12  # Native Python (python-build-standalone)"
