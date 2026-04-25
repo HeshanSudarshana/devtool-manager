@@ -134,57 +134,77 @@ pull_python() {
 }
 
 # Set Python version as active using pyenv
+# Usage: set_python <version> [mode]
+#   mode: "set" (default) calls `pyenv global` (machine-wide).
+#         "use" only emits `pyenv shell` (current shell only).
 set_python() {
     local version="$1"
-    
+    local mode="${2:-set}"
+
     if ! ensure_pyenv; then
         exit 1
     fi
-    
-    log_info "Switching to Python $version using pyenv..." >&2
-    
-    # Use pyenv global to set the version
-    pyenv global "$version" 2>&1 >&2
-    
-    if [[ $? -ne 0 ]]; then
-        log_error "Failed to switch to Python $version" >&2
-        log_info "Available versions:" >&2
-        pyenv versions >&2
-        exit 1
+
+    if [[ "$mode" == "set" ]]; then
+        log_info "Switching to Python $version using pyenv..." >&2
+
+        pyenv global "$version" 2>&1 >&2
+
+        if [[ $? -ne 0 ]]; then
+            log_error "Failed to switch to Python $version" >&2
+            log_info "Available versions:" >&2
+            pyenv versions >&2
+            exit 1
+        fi
+    else
+        # Validate the version exists for pyenv before emitting exports.
+        if ! pyenv versions --bare 2>/dev/null | grep -qx "$version"; then
+            log_error "Python $version is not installed (via pyenv)" >&2
+            exit 1
+        fi
     fi
-    
-    # Get the python path after pyenv global
-    local python_path=$(pyenv which python 2>/dev/null)
-    local python_root=$(pyenv root)
-    local python_version_dir="${python_root}/versions/${version}"
-    
-    if [[ -z "$python_path" ]]; then
-        log_error "Could not determine Python installation path" >&2
-        exit 1
-    fi
-    
-    log_success "Python $version activated" >&2
-    
-    # Show version info
-    if [[ -f "$python_path" ]]; then
-        echo "" >&2
-        log_info "Version details:" >&2
-        "$python_path" --version >&2
-        log_info "pip version: $(dirname "$python_path")/pip --version 2>&1 | head -1" >&2
-        log_info "Location: $python_version_dir" >&2
-        echo "" >&2
-    fi
-    
-    log_info "Applying changes to current shell..." >&2
-    
-    # Output export commands for dtm wrapper to eval
-    # Initialize pyenv and set the global version
-    cat << EOF
+
+    local python_root
+    python_root=$(pyenv root)
+
+    if [[ "$mode" == "set" ]]; then
+        local python_path
+        python_path=$(pyenv which python 2>/dev/null)
+        local python_version_dir="${python_root}/versions/${version}"
+
+        if [[ -z "$python_path" ]]; then
+            log_error "Could not determine Python installation path" >&2
+            exit 1
+        fi
+
+        log_success "Python $version activated" >&2
+
+        if [[ -f "$python_path" ]]; then
+            echo "" >&2
+            log_info "Version details:" >&2
+            "$python_path" --version >&2
+            log_info "pip version: $(dirname "$python_path")/pip --version 2>&1 | head -1" >&2
+            log_info "Location: $python_version_dir" >&2
+            echo "" >&2
+        fi
+
+        log_info "Applying changes to current shell..." >&2
+
+        cat << EOF
 export PYENV_ROOT="${python_root}"
 export PATH="\${PYENV_ROOT}/bin:\${PATH}"
 eval "\$(pyenv init -)"
 pyenv global ${version}
 EOF
+    else
+        # use mode: per-shell only via `pyenv shell`. Do not mutate global.
+        cat << EOF
+export PYENV_ROOT="${python_root}"
+export PATH="\${PYENV_ROOT}/bin:\${PATH}"
+eval "\$(pyenv init -)"
+pyenv shell ${version}
+EOF
+    fi
 }
 
 # List installed Python versions using pyenv

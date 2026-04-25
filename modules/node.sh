@@ -91,49 +91,54 @@ pull_node() {
 }
 
 # Set Node.js version as active using nvm
+# Usage: set_node <version> [mode]
+#   mode: "set" (default) verbose; "use" quiet (for shell-only activation).
+#   nvm itself is per-shell, so neither mode persists beyond emitted exports.
 set_node() {
     local version="$1"
-    
+    local mode="${2:-set}"
+
     if ! ensure_nvm; then
         exit 1
     fi
-    
-    log_info "Switching to Node.js $version using nvm..." >&2
-    
-    # Use nvm to switch version
-    nvm use "$version" >&2
-    
-    if [[ $? -ne 0 ]]; then
+
+    if [[ "$mode" == "set" ]]; then
+        log_info "Switching to Node.js $version using nvm..." >&2
+    fi
+
+    nvm use "$version" >/dev/null 2>&1
+    local rc=$?
+    if [[ $rc -ne 0 ]]; then
         log_error "Failed to switch to Node.js $version" >&2
-        log_info "Available versions:" >&2
-        nvm ls >&2
+        if [[ "$mode" == "set" ]]; then
+            log_info "Available versions:" >&2
+            nvm ls >&2
+        fi
         exit 1
     fi
-    
-    # Get the actual node path after nvm use
-    local node_path=$(nvm which "$version" 2>/dev/null)
-    local node_dir=$(dirname "$(dirname "$node_path")")
-    
+
+    local node_path
+    node_path=$(nvm which "$version" 2>/dev/null)
+
     if [[ -z "$node_path" ]]; then
         log_error "Could not determine Node.js installation path" >&2
         exit 1
     fi
-    
-    log_success "Node.js $version activated" >&2
-    
-    # Show version info
-    if [[ -f "$node_path" ]]; then
-        echo "" >&2
-        log_info "Version details:" >&2
-        "$node_path" --version >&2
-        log_info "npm version: $(dirname "$node_path")/npm --version 2>/dev/null" >&2
-        echo "" >&2
+
+    if [[ "$mode" == "set" ]]; then
+        log_success "Node.js $version activated" >&2
+
+        if [[ -f "$node_path" ]]; then
+            echo "" >&2
+            log_info "Version details:" >&2
+            "$node_path" --version >&2
+            log_info "npm version: $(dirname "$node_path")/npm --version 2>/dev/null" >&2
+            echo "" >&2
+        fi
+
+        log_info "Applying changes to current shell..." >&2
     fi
-    
-    log_info "Applying changes to current shell..." >&2
-    
-    # Output export commands for dtm wrapper to eval
-    # We need to update PATH to point to nvm's current node
+
     echo "export NVM_DIR=\"${NVM_DIR:-$HOME/.nvm}\""
     echo "[ -s \"\$NVM_DIR/nvm.sh\" ] && source \"\$NVM_DIR/nvm.sh\""
     echo "nvm use $version --silent"

@@ -135,12 +135,15 @@ pull_gradle() {
 }
 
 # Set Gradle version as active
+# Usage: set_gradle <version> [mode]
+#   mode: "set" (default) writes ~/.dtmrc; "use" applies to current shell only.
 set_gradle() {
     local version="$1"
-    
+    local mode="${2:-set}"
+
     # Find matching installation
     local install_dir=""
-    
+
     if [[ -d "${GRADLE_ROOT}/${version}" ]]; then
         install_dir="${GRADLE_ROOT}/${version}"
     else
@@ -162,31 +165,29 @@ set_gradle() {
         fi
     fi
 
-    log_info "Setting Gradle to $(basename "$install_dir")..." >&2
+    if [[ "$mode" == "set" ]]; then
+        log_info "Setting Gradle to $(basename "$install_dir")..." >&2
 
-    mkdir -p "$(dirname "$DTM_CONFIG")"
+        mkdir -p "$(dirname "$DTM_CONFIG")"
+        dtm_clean_dtmrc_for "GRADLE_HOME" "/gradle/.*/bin"
 
-    dtm_clean_dtmrc_for "GRADLE_HOME" "/gradle/.*/bin"
-    
-    # Add new Gradle configuration
-    cat >> "$DTM_CONFIG" << EOF
+        cat >> "$DTM_CONFIG" << EOF
 export GRADLE_HOME="${install_dir}"
 export PATH="\${GRADLE_HOME}/bin:\${PATH}"
 EOF
-    
-    log_success "Gradle $(basename "$install_dir") activated" >&2
-    
-    # Show current Gradle version
-    if [[ -f "${install_dir}/bin/gradle" ]]; then
-        echo "" >&2
-        log_info "Version details:" >&2
-        "${install_dir}/bin/gradle" --version 2>&1 | head -5 >&2
-        echo "" >&2
+
+        log_success "Gradle $(basename "$install_dir") activated" >&2
+
+        if [[ -f "${install_dir}/bin/gradle" ]]; then
+            echo "" >&2
+            log_info "Version details:" >&2
+            "${install_dir}/bin/gradle" --version 2>&1 | head -5 >&2
+            echo "" >&2
+        fi
+
+        log_info "Applying changes to current shell..." >&2
     fi
-    
-    log_info "Applying changes to current shell..." >&2
-    
-    # Output the export commands to stdout (plain text, no colors)
+
     echo "export GRADLE_HOME=\"${install_dir}\""
     echo "export PATH=\"\${GRADLE_HOME}/bin:\${PATH}\""
 }

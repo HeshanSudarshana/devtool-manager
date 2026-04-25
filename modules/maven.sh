@@ -119,12 +119,15 @@ pull_maven() {
 }
 
 # Set Maven version as active
+# Usage: set_maven <version> [mode]
+#   mode: "set" (default) writes ~/.dtmrc; "use" applies to current shell only.
 set_maven() {
     local version="$1"
-    
+    local mode="${2:-set}"
+
     # Find matching installation
     local install_dir=""
-    
+
     if [[ -d "${MAVEN_ROOT}/${version}" ]]; then
         install_dir="${MAVEN_ROOT}/${version}"
     else
@@ -141,33 +144,31 @@ set_maven() {
         fi
     fi
 
-    log_info "Setting Maven to $(basename "$install_dir")..." >&2
+    if [[ "$mode" == "set" ]]; then
+        log_info "Setting Maven to $(basename "$install_dir")..." >&2
 
-    mkdir -p "$(dirname "$DTM_CONFIG")"
+        mkdir -p "$(dirname "$DTM_CONFIG")"
+        dtm_clean_dtmrc_for "MAVEN_HOME" "/maven/.*/bin"
+        dtm_clean_dtmrc_for "M2_HOME"
 
-    dtm_clean_dtmrc_for "MAVEN_HOME" "/maven/.*/bin"
-    dtm_clean_dtmrc_for "M2_HOME"
-    
-    # Add new Maven configuration
-    cat >> "$DTM_CONFIG" << EOF
+        cat >> "$DTM_CONFIG" << EOF
 export MAVEN_HOME="${install_dir}"
 export M2_HOME="${install_dir}"
 export PATH="\${MAVEN_HOME}/bin:\${PATH}"
 EOF
-    
-    log_success "Maven $(basename "$install_dir") activated" >&2
-    
-    # Show current Maven version
-    if [[ -f "${install_dir}/bin/mvn" ]]; then
-        echo "" >&2
-        log_info "Version details:" >&2
-        "${install_dir}/bin/mvn" --version 2>&1 | head -3 >&2
-        echo "" >&2
+
+        log_success "Maven $(basename "$install_dir") activated" >&2
+
+        if [[ -f "${install_dir}/bin/mvn" ]]; then
+            echo "" >&2
+            log_info "Version details:" >&2
+            "${install_dir}/bin/mvn" --version 2>&1 | head -3 >&2
+            echo "" >&2
+        fi
+
+        log_info "Applying changes to current shell..." >&2
     fi
-    
-    log_info "Applying changes to current shell..." >&2
-    
-    # Output the export commands to stdout (plain text, no colors)
+
     echo "export MAVEN_HOME=\"${install_dir}\""
     echo "export M2_HOME=\"${install_dir}\""
     echo "export PATH=\"\${MAVEN_HOME}/bin:\${PATH}\""

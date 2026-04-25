@@ -152,12 +152,15 @@ pull_go() {
 }
 
 # Set Go version as active
+# Usage: set_go <version> [mode]
+#   mode: "set" (default) writes ~/.dtmrc; "use" applies to current shell only.
 set_go() {
     local version="$1"
-    
+    local mode="${2:-set}"
+
     # Find matching installation
     local install_dir=""
-    
+
     if [[ -d "${GO_ROOT}/${version}" ]]; then
         install_dir="${GO_ROOT}/${version}"
     else
@@ -185,38 +188,38 @@ set_go() {
 
     if [[ ! -d "$workspace_dir" ]]; then
         mkdir -p "$workspace_dir"/{src,pkg,bin}
-        log_info "Created workspace directory at $workspace_dir" >&2
+        if [[ "$mode" == "set" ]]; then
+            log_info "Created workspace directory at $workspace_dir" >&2
+        fi
     fi
 
-    log_info "Setting Go to $exact_version..." >&2
+    if [[ "$mode" == "set" ]]; then
+        log_info "Setting Go to $exact_version..." >&2
 
-    mkdir -p "$(dirname "$DTM_CONFIG")"
+        mkdir -p "$(dirname "$DTM_CONFIG")"
+        dtm_clean_dtmrc_for "GOROOT" "/go/.*/bin"
+        dtm_clean_dtmrc_for "GOPATH"
 
-    dtm_clean_dtmrc_for "GOROOT" "/go/.*/bin"
-    dtm_clean_dtmrc_for "GOPATH"
-    
-    # Add new Go configuration
-    cat >> "$DTM_CONFIG" << EOF
+        cat >> "$DTM_CONFIG" << EOF
 export GOROOT="${install_dir}"
 export GOPATH="${workspace_dir}"
 export PATH="\${GOROOT}/bin:\${GOPATH}/bin:\${PATH}"
 EOF
-    
-    log_success "Go $exact_version activated" >&2
-    
-    # Show current Go version
-    if [[ -f "${install_dir}/bin/go" ]]; then
-        echo "" >&2
-        log_info "Version details:" >&2
-        "${install_dir}/bin/go" version 2>&1 >&2
-        log_info "GOROOT: $install_dir" >&2
-        log_info "GOPATH: $workspace_dir" >&2
-        echo "" >&2
+
+        log_success "Go $exact_version activated" >&2
+
+        if [[ -f "${install_dir}/bin/go" ]]; then
+            echo "" >&2
+            log_info "Version details:" >&2
+            "${install_dir}/bin/go" version 2>&1 >&2
+            log_info "GOROOT: $install_dir" >&2
+            log_info "GOPATH: $workspace_dir" >&2
+            echo "" >&2
+        fi
+
+        log_info "Applying changes to current shell..." >&2
     fi
-    
-    log_info "Applying changes to current shell..." >&2
-    
-    # Output the export commands to stdout (plain text, no colors)
+
     echo "export GOROOT=\"${install_dir}\""
     echo "export GOPATH=\"${workspace_dir}\""
     echo "export PATH=\"\${GOROOT}/bin:\${GOPATH}/bin:\${PATH}\""

@@ -142,12 +142,15 @@ pull_java() {
 }
 
 # Set Java version as active
+# Usage: set_java <version> [mode]
+#   mode: "set" (default) writes ~/.dtmrc; "use" applies to current shell only.
 set_java() {
     local version="$1"
-    
+    local mode="${2:-set}"
+
     # Find matching installation
     local install_dir=""
-    
+
     if [[ -d "${JAVA_ROOT}/${version}" ]]; then
         install_dir="${JAVA_ROOT}/${version}"
     else
@@ -165,31 +168,29 @@ set_java() {
         fi
     fi
 
-    log_info "Setting Java to $(basename "$install_dir")..." >&2
+    if [[ "$mode" == "set" ]]; then
+        log_info "Setting Java to $(basename "$install_dir")..." >&2
 
-    mkdir -p "$(dirname "$DTM_CONFIG")"
+        mkdir -p "$(dirname "$DTM_CONFIG")"
+        dtm_clean_dtmrc_for "JAVA_HOME" "/java/.*/bin"
 
-    dtm_clean_dtmrc_for "JAVA_HOME" "/java/.*/bin"
-    
-    # Add new Java configuration
-    cat >> "$DTM_CONFIG" << EOF
+        cat >> "$DTM_CONFIG" << EOF
 export JAVA_HOME="${install_dir}"
 export PATH="\${JAVA_HOME}/bin:\${PATH}"
 EOF
-    
-    log_success "Java $(basename "$install_dir") activated" >&2
-    
-    # Show current Java version from the new installation
-    if [[ -f "${install_dir}/bin/java" ]]; then
-        echo "" >&2
-        log_info "Version details:" >&2
-        "${install_dir}/bin/java" -version 2>&1 | head -3 >&2
-        echo "" >&2
+
+        log_success "Java $(basename "$install_dir") activated" >&2
+
+        if [[ -f "${install_dir}/bin/java" ]]; then
+            echo "" >&2
+            log_info "Version details:" >&2
+            "${install_dir}/bin/java" -version 2>&1 | head -3 >&2
+            echo "" >&2
+        fi
+
+        log_info "Applying changes to current shell..." >&2
     fi
-    
-    log_info "Applying changes to current shell..." >&2
-    
-    # Output the export commands to stdout (plain text, no colors)
+
     echo "export JAVA_HOME=\"${install_dir}\""
     echo "export PATH=\"\${JAVA_HOME}/bin:\${PATH}\""
 }

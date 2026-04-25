@@ -3,7 +3,8 @@
 # DevTool Manager (dtm) - Manage development tools like JDK, Maven, Gradle, Go
 # Usage:
 #   dtm pull <tool> <version>    - Download and install a tool version
-#   dtm set <tool> <version>     - Set PATH and environment variables for a tool version
+#   dtm set <tool> <version>     - Set tool version globally (~/.dtmrc + current shell)
+#   dtm use <tool> <version>     - Set tool version for current shell only (no persist)
 #   dtm list <tool>              - List installed versions
 #   dtm current <tool>           - Print the active version of a tool
 #   dtm available <tool> [filter]- Query remote for installable versions
@@ -227,7 +228,8 @@ DevTool Manager (dtm) - Manage development tools
 
 Usage:
   dtm pull <tool> <version>       Download and install a tool version
-  dtm set <tool> <version>        Set PATH and environment for a tool
+  dtm set <tool> <version>        Set tool version globally (~/.dtmrc + current shell)
+  dtm use <tool> <version>        Set tool version for current shell only
   dtm list <tool>                 List installed versions
   dtm current <tool>              Print the active version of a tool
   dtm available <tool> [filter]   Query remote for installable versions
@@ -245,7 +247,8 @@ Supported tools:
 Examples:
   dtm pull java 11              Pull latest Java 11
   dtm pull java 11.0.29         Pull specific Java 11.0.29
-  dtm set java 11               Set Java 11 as active
+  dtm set java 11               Set Java 11 globally (writes ~/.dtmrc)
+  dtm use java 11               Set Java 11 for current shell only
   dtm list java                 List installed Java versions
   dtm current java              Show active Java version
   dtm available java            List Java major releases on Temurin
@@ -416,12 +419,28 @@ main() {
             fi
 
             case "$tool" in
-                java) set_java "$version" ;;
-                maven) set_maven "$version" ;;
-                gradle) set_gradle "$version" ;;
-                go) set_go "$version" ;;
-                node) set_node "$version" ;;
-                python) set_python "$version" ;;
+                java) set_java "$version" set ;;
+                maven) set_maven "$version" set ;;
+                gradle) set_gradle "$version" set ;;
+                go) set_go "$version" set ;;
+                node) set_node "$version" set ;;
+                python) set_python "$version" set ;;
+                *) log_error "Unknown tool: $tool"; exit 1 ;;
+            esac
+            ;;
+        use)
+            if [[ -z "$version" ]]; then
+                log_error "Version is required for use command"
+                exit 1
+            fi
+
+            case "$tool" in
+                java) set_java "$version" use ;;
+                maven) set_maven "$version" use ;;
+                gradle) set_gradle "$version" use ;;
+                go) set_go "$version" use ;;
+                node) set_node "$version" use ;;
+                python) set_python "$version" use ;;
                 *) log_error "Unknown tool: $tool"; exit 1 ;;
             esac
             ;;

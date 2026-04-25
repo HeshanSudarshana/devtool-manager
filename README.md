@@ -5,11 +5,13 @@ A command-line tool to manage development tools like JDK, Maven, Gradle, Go, Nod
 ## Features
 
 - **Pull**: Download and install specific versions of development tools
-- **Set**: Activate a specific version by setting environment variables (auto-applies to current shell!)
+- **Set**: Activate a version globally (writes `~/.dtmrc` and applies to current shell)
+- **Use**: Activate a version for the current shell only (no persistence)
 - **List**: View all installed versions
 - **Current**: Show the active version of a tool
 - **Available**: Query the upstream registry for installable versions (java/maven/gradle/go)
 - **Remove**: Uninstall specific versions
+- **`.tool-versions` auto-switch**: asdf-style per-project version pinning with optional auto-apply on `cd`
 
 ## Supported Tools
 
@@ -241,6 +243,49 @@ dtm remove python 3.11.7
 - Auto-applies version changes to current shell
 - Can still use `pyenv` commands directly
 - See available versions: `pyenv install --list`
+
+### `set` vs `use`
+
+- `dtm set <tool> <version>` — writes the activation to `~/.dtmrc` so new shells inherit it (and applies it to the current shell). For Python it also runs `pyenv global`.
+- `dtm use <tool> <version>` — applies only to the current shell. Nothing is persisted to `~/.dtmrc`. For Python this uses `pyenv shell` instead of `pyenv global` so other shells are unaffected.
+
+```bash
+# global (default, persists)
+dtm set java 21
+
+# this shell only
+dtm use java 17
+```
+
+### Per-project `.tool-versions` (asdf-style)
+
+Drop a `.tool-versions` file in a project root listing one tool per line:
+
+```
+java 21
+go 1.22
+node 20
+python 3.12.1
+```
+
+Lines starting with `#` are comments. asdf aliases (`nodejs`, `golang`) are also recognized.
+
+Apply manually from any directory inside the project:
+
+```bash
+# walks up from $PWD, applies each line via `dtm use`
+dtm use java 21   # or run a helper, see auto-switch below
+```
+
+Or enable **auto-switch on `cd`** by exporting `DTM_AUTO_SWITCH=1` *before* sourcing `dtm.sh`:
+
+```bash
+# in ~/.bashrc / ~/.zshrc, before sourcing dtm.sh
+export DTM_AUTO_SWITCH=1
+source /path/to/devtool-manager/dtm.sh
+```
+
+When enabled, dtm walks up from the current directory whenever the prompt is shown (zsh `chpwd` hook / bash `PROMPT_COMMAND`) and applies the nearest `.tool-versions`. Re-applies are skipped when neither the file path nor its mtime changed, so the hook is cheap on no-op cds. Leaving the project tree does **not** revert previously applied versions — they persist until you explicitly switch or open a new shell.
 
 ### Listing available (installable) versions
 
