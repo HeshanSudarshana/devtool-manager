@@ -87,6 +87,54 @@ fi
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  Shell completion"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
+COMPLETIONS_DIR="${SCRIPT_DIR}/completions"
+case "$ACTIVE_SHELL" in
+    bash)
+        if ! grep -q "completions/dtm.bash" "$SHELL_RC" 2>/dev/null; then
+            echo "" >> "$SHELL_RC"
+            echo "# DevTool Manager - bash completion" >> "$SHELL_RC"
+            echo "[ -f \"${COMPLETIONS_DIR}/dtm.bash\" ] && source \"${COMPLETIONS_DIR}/dtm.bash\"" >> "$SHELL_RC"
+            echo "✓ Added bash completion source to $SHELL_RC"
+        else
+            echo "✓ bash completion already wired into $SHELL_RC"
+        fi
+        ;;
+    zsh)
+        ZSH_COMP_DIR="${HOME}/.zsh/completions"
+        mkdir -p "$ZSH_COMP_DIR"
+        if [ -L "${ZSH_COMP_DIR}/_dtm" ] || [ -e "${ZSH_COMP_DIR}/_dtm" ]; then
+            rm -f "${ZSH_COMP_DIR}/_dtm"
+        fi
+        ln -s "${COMPLETIONS_DIR}/_dtm" "${ZSH_COMP_DIR}/_dtm"
+        echo "✓ Linked zsh completion to ${ZSH_COMP_DIR}/_dtm"
+        if ! grep -q "${ZSH_COMP_DIR}" "$SHELL_RC" 2>/dev/null; then
+            echo ""
+            echo "Add this to your $SHELL_RC BEFORE 'compinit':"
+            echo "  fpath=(${ZSH_COMP_DIR} \$fpath)"
+            echo "Then run: rm -f ~/.zcompdump && compinit"
+        fi
+        ;;
+    fish)
+        FISH_COMP_DIR="${HOME}/.config/fish/completions"
+        mkdir -p "$FISH_COMP_DIR"
+        if [ -L "${FISH_COMP_DIR}/dtm.fish" ] || [ -e "${FISH_COMP_DIR}/dtm.fish" ]; then
+            rm -f "${FISH_COMP_DIR}/dtm.fish"
+        fi
+        ln -s "${COMPLETIONS_DIR}/dtm.fish" "${FISH_COMP_DIR}/dtm.fish"
+        echo "✓ Linked fish completion to ${FISH_COMP_DIR}/dtm.fish"
+        ;;
+    *)
+        echo "Skipping completion install for shell '$ACTIVE_SHELL'"
+        echo "Manual install files in: ${COMPLETIONS_DIR}"
+        ;;
+esac
+
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  DTM Home Directory"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""

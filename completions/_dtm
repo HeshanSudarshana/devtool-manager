@@ -1,0 +1,108 @@
+#compdef dtm
+# Zsh completion for dtm (DevTool Manager)
+#
+# Place this file in a directory on your $fpath, e.g.:
+#   mkdir -p ~/.zsh/completions
+#   cp _dtm ~/.zsh/completions/
+# and add to ~/.zshrc before `compinit`:
+#   fpath=(~/.zsh/completions $fpath)
+
+_dtm_root() {
+    if [[ -n "$DTM_HOME" ]]; then
+        print -r -- "$DTM_HOME"
+    elif [[ -f "$HOME/.dtmconfig" ]]; then
+        local line
+        line=$(grep -E '^[[:space:]]*export[[:space:]]+DTM_HOME=' "$HOME/.dtmconfig" 2>/dev/null | tail -1)
+        line="${line#*=}"
+        line="${line//\"/}"
+        line="${line//\'/}"
+        if [[ -n "$line" ]]; then
+            print -r -- "${~line}"
+        else
+            print -r -- "$HOME/development/devtools"
+        fi
+    else
+        print -r -- "$HOME/development/devtools"
+    fi
+}
+
+_dtm_installed_versions() {
+    local tool="$1" root dir
+    root="$(_dtm_root)/$tool"
+    [[ -d "$root" ]] || return 0
+    local -a versions=()
+    for dir in "$root"/*(N/); do
+        versions+=("${dir:t}")
+    done
+    print -r -- "${versions[@]}"
+}
+
+_dtm() {
+    local -a commands tools
+    commands=(
+        'pull:Download and install a tool version'
+        'set:Set tool version globally'
+        'use:Set tool version for current shell only'
+        'list:List installed versions'
+        'current:Print active version of a tool'
+        'available:Query remote for installable versions'
+        'update:Bump active install to latest patch'
+        'remove:Remove an installed version'
+        'doctor:Diagnose dtm environment'
+        'self-update:Update dtm itself via git pull'
+        'config:Get or set dtm configuration'
+    )
+    tools=(java maven gradle go node python)
+
+    local context state line
+    typeset -A opt_args
+
+    _arguments -C \
+        '1: :->cmd' \
+        '2: :->arg2' \
+        '3: :->arg3' \
+        '*: :->rest'
+
+    case "$state" in
+        cmd)
+            _describe -t commands 'dtm command' commands
+            ;;
+        arg2)
+            case "${words[2]}" in
+                doctor|self-update)
+                    ;;
+                config)
+                    _values 'config subcommand' 'home[Get or set DTM_HOME]'
+                    ;;
+                pull|set|use|list|current|available|update|remove)
+                    _values 'tool' "${tools[@]}"
+                    ;;
+            esac
+            ;;
+        arg3)
+            local cmd="${words[2]}"
+            local tool="${words[3]}"
+            case "$cmd" in
+                set|use|remove)
+                    local -a versions
+                    versions=( ${(f)"$(_dtm_installed_versions "$tool")"} )
+                    if (( ${#versions} )); then
+                        _describe -t versions "installed $tool versions" versions
+                    fi
+                    ;;
+                available)
+                    if [[ "$tool" == "java" ]]; then
+                        _values 'java filter' temurin zulu corretto liberica 8 11 17 21
+                    fi
+                    ;;
+                config)
+                    if [[ "$tool" == "home" ]]; then
+                        _files -/
+                    fi
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+_dtm "$@"
