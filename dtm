@@ -172,7 +172,7 @@ dtm_check_deps() {
 
 # Verify a file's checksum.
 # Usage: verify_checksum <file> <expected_hash> [algo]
-# algo: sha256 (default) or sha512
+# algo: sha256 (default), sha512, or sha1
 verify_checksum() {
     local file="$1"
     local expected="$2"
@@ -202,6 +202,16 @@ verify_checksum() {
                 actual=$(shasum -a 512 "$file" | awk '{print $1}')
             else
                 log_error "No SHA-512 tool available (install coreutils or shasum)"
+                return 1
+            fi
+            ;;
+        sha1)
+            if command -v sha1sum >/dev/null 2>&1; then
+                actual=$(sha1sum "$file" | awk '{print $1}')
+            elif command -v shasum >/dev/null 2>&1; then
+                actual=$(shasum -a 1 "$file" | awk '{print $1}')
+            else
+                log_error "No SHA-1 tool available (install coreutils or shasum)"
                 return 1
             fi
             ;;
@@ -243,24 +253,33 @@ Usage:
   dtm config home [path]          Get or set the DTM_HOME directory
 
 Supported tools:
-  java    - JDK from Eclipse Temurin
+  java    - JDK (Eclipse Temurin default; also zulu, corretto, liberica)
   maven   - Apache Maven
   gradle  - Gradle Build Tool
   go      - Go Programming Language
   node    - Node.js (via nvm)
   python  - Python (via pyenv)
 
+Java distribution spec: <dist>@<version>, or bare <version> for temurin.
+Supported dists: temurin (default), zulu, corretto, liberica.
+
 Examples:
-  dtm pull java 11              Pull latest Java 11
-  dtm pull java 11.0.29         Pull specific Java 11.0.29
-  dtm set java 11               Set Java 11 globally (writes ~/.dtmrc)
-  dtm use java 11               Set Java 11 for current shell only
-  dtm list java                 List installed Java versions
-  dtm current java              Show active Java version
-  dtm available java            List Java major releases on Temurin
-  dtm available java 21         List all Java 21 GA patch versions
+  dtm pull java 11              Pull latest Temurin 11
+  dtm pull java 11.0.29         Pull specific Temurin 11.0.29
+  dtm pull java zulu@21         Pull latest Zulu 21
+  dtm pull java corretto@17     Pull latest Corretto 17
+  dtm pull java liberica@21     Pull latest Liberica 21
+  dtm set java 11               Set Temurin 11 globally
+  dtm set java zulu@21          Set Zulu 21 globally
+  dtm use java zulu@21          Set Zulu 21 for current shell only
+  dtm list java                 List installed Java versions (all dists)
+  dtm current java              Show active Java version (e.g. zulu@21.0.11)
+  dtm available java            List Temurin major releases
+  dtm available java 21         List all Temurin 21 GA patches
+  dtm available java zulu       List Zulu major releases
+  dtm available java zulu@21    List all Zulu 21 GA patches
   dtm available go 1.22         List Go versions matching 1.22.x
-  dtm update java               Bump active Java to latest patch in major series
+  dtm update java               Bump active Java to latest patch (preserves dist)
   dtm doctor                    Diagnose dtm install (deps, PATH, broken installs)
   dtm self-update               Pull latest dtm from its git remote
   dtm config home               Show current DTM_HOME path

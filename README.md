@@ -15,7 +15,7 @@ A command-line tool to manage development tools like JDK, Maven, Gradle, Go, Nod
 
 ## Supported Tools
 
-- **Java/JDK** - Eclipse Temurin (native implementation)
+- **Java/JDK** - Eclipse Temurin (default), Azul Zulu, Amazon Corretto, BellSoft Liberica
 - **Maven** - Apache Maven (native implementation)
 - **Gradle** - Gradle Build Tool (native implementation)
 - **Go** - Go Programming Language (native implementation with separate GOPATH per version)
@@ -50,30 +50,36 @@ This enables automatic environment variable application when using `dtm set` com
 
 ### Java/JDK Management
 
-Download and install Java versions from Eclipse Temurin:
+dtm supports multiple Java distributions. Specify one with `<dist>@<version>`;
+a bare version implies the default (`temurin`).
+
+| Dist       | Provider                  | Notes                              |
+| ---------- | ------------------------- | ---------------------------------- |
+| `temurin`  | Eclipse Temurin (default) | sha256 verified                    |
+| `zulu`     | Azul Zulu OpenJDK         | sha256 verified                    |
+| `corretto` | Amazon Corretto           | sha256; current-latest-of-major only |
+| `liberica` | BellSoft Liberica         | sha1 verified (only hash exposed)  |
 
 ```bash
-# Pull latest Java 11
-dtm pull java 11
+# Temurin (default) — bare version
+dtm pull java 21
+dtm pull java 21.0.5
 
-# Pull specific Java version
-dtm pull java 11.0.21
-
-# Pull latest Java 17
-dtm pull java 17
-
-# Pull specific Java 17 version
-dtm pull java 17.0.9
+# Other distributions
+dtm pull java zulu@21
+dtm pull java corretto@17
+dtm pull java liberica@21
+dtm pull java liberica@21.0.11+11
 ```
 
 Set a Java version as active:
 
 ```bash
-# Set Java 11 (uses latest installed 11.x version)
-dtm set java 11
+# Set latest installed Temurin 21
+dtm set java 21
 
-# Set specific Java version
-dtm set java 11.0.21
+# Set a specific Zulu install
+dtm set java zulu@21.0.11
 ```
 
 **The changes are automatically applied to your current shell!** No need to source anything manually - the wrapper function takes care of it.
@@ -292,11 +298,17 @@ When enabled, dtm walks up from the current directory whenever the prompt is sho
 Query the upstream registry for versions you could install. Supported for `java`, `maven`, `gradle`, and `go`. For `node` and `python`, use `nvm ls-remote` and `pyenv install --list` directly.
 
 ```bash
-# Java major releases on Temurin (LTS marked)
+# Java major releases on Temurin (default; LTS marked)
 dtm available java
 
-# All GA patch versions for a specific Java major
+# All GA patch versions for a specific Temurin major
 dtm available java 21
+
+# Other distributions
+dtm available java zulu          # Zulu majors
+dtm available java zulu@21       # Zulu 21 patches
+dtm available java liberica@17   # Liberica 17 patches
+dtm available java corretto      # Corretto-supported majors
 
 # Recent Maven / Gradle / Go releases
 dtm available maven
@@ -400,10 +412,13 @@ The tool creates a configuration file at `~/.dtmrc` which contains environment v
 
 ### Java/JDK
 
-1. **Pull**: Downloads JDK from Eclipse Temurin's API
-   - Queries the API for the latest version if only major version is specified
+1. **Pull**: Downloads JDK from the chosen distribution's API (Temurin, Zulu,
+   Corretto, or Liberica)
+   - Queries the API for the latest version when only a major is specified
    - Downloads the appropriate tarball for your OS and architecture
-   - Extracts to `~/development/devtools/java/<version>/`
+   - Verifies the checksum (sha256, or sha1 for Liberica) before extracting
+   - Extracts Temurin to `~/development/devtools/java/<version>/`; other
+     distributions to `~/development/devtools/java/<dist>-<version>/`
    - Cleans up the downloaded tarball
 
 2. **Set**: Configures environment variables
