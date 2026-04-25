@@ -64,6 +64,7 @@ complete -c dtm -n '__dtm_at_token 1' -a update      -d 'Bump active install to 
 complete -c dtm -n '__dtm_at_token 1' -a remove      -d 'Remove an installed version'
 complete -c dtm -n '__dtm_at_token 1' -a doctor      -d 'Diagnose dtm environment'
 complete -c dtm -n '__dtm_at_token 1' -a self-update -d 'Update dtm itself via git pull'
+complete -c dtm -n '__dtm_at_token 1' -a uninstall   -d 'Remove dtm itself (symlink, hooks, config)'
 complete -c dtm -n '__dtm_at_token 1' -a config      -d 'Get or set dtm configuration'
 
 # Tool argument

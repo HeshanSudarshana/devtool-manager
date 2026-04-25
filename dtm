@@ -2,7 +2,7 @@
 
 # DevTool Manager (dtm) - Manage development tools like JDK, Maven, Gradle, Go
 # Usage:
-#   dtm [--yes|-y] [--json] <command> ...
+#   dtm [--yes|-y] [--json] [--quiet|-q] <command> ...
 #
 #   dtm pull <tool> <version>    - Download and install a tool version
 #   dtm set <tool> <version>     - Set tool version globally (~/.dtmrc + current shell)
@@ -14,11 +14,15 @@
 #   dtm remove <tool> <version>  - Remove an installed version
 #   dtm doctor                   - Diagnose dtm environment (deps, PATH, installs)
 #   dtm self-update              - Update dtm itself (git pull in install dir)
+#   dtm uninstall                - Remove dtm symlink, shell rc hooks, and config
 #   dtm config home [path]       - Get or set the DTM_HOME directory
 #
 # Global flags:
-#   --yes, -y    Assume "yes" to confirmation prompts (CI/scripting).
-#   --json       Emit machine-readable JSON for current/list/available/doctor.
+#   --yes, -y     Assume "yes" to confirmation prompts (CI/scripting).
+#   --json        Emit machine-readable JSON for current/list/available/doctor.
+#   --quiet, -q   Suppress informational output. Warnings/errors still print.
+#
+# Color is auto-disabled when stdout is piped or NO_COLOR is set.
 
 set -e
 
@@ -58,36 +62,47 @@ mkdir -p "$DTM_ROOT"
 export DTM_TEMURIN_API DTM_MAVEN_REPO DTM_MAVEN_DIST \
        DTM_GRADLE_DIST DTM_GO_DIST DTM_GO_CHECKSUM
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+# Colors for output. Disabled when NO_COLOR is set (https://no-color.org) or
+# when the relevant stream is not a TTY. Errors/warnings always go to stderr,
+# so they decide based on stderr; info/success go to stdout.
+if [[ -n "${NO_COLOR:-}" ]] || [[ ! -t 1 ]]; then
+    GREEN='' BLUE='' NC_OUT=''
+else
+    GREEN='\033[0;32m'
+    BLUE='\033[0;34m'
+    NC_OUT='\033[0m'
+fi
+if [[ -n "${NO_COLOR:-}" ]] || [[ ! -t 2 ]]; then
+    RED='' YELLOW='' NC_ERR=''
+else
+    RED='\033[0;31m'
+    YELLOW='\033[1;33m'
+    NC_ERR='\033[0m'
+fi
+# Backwards-compat alias for any module that referenced NC directly.
+NC="$NC_OUT"
 
-# Logging functions. In --json mode, info/success/warn are silenced so stdout
-# stays clean for the JSON payload; errors still go to stderr.
+# Logging functions.
+# - --json silences info/success/warn so stdout stays valid JSON.
+# - --quiet (DTM_QUIET) silences info/success only; warnings/errors still print.
+# - warnings and errors always go to stderr so piped stdout stays clean.
 log_info() {
-    [[ -n "$DTM_OUTPUT_JSON" ]] && return 0
-    echo -e "${BLUE}[INFO]${NC} $1"
+    [[ -n "$DTM_OUTPUT_JSON" || -n "$DTM_QUIET" ]] && return 0
+    echo -e "${BLUE}[INFO]${NC_OUT} $1"
 }
 
 log_success() {
-    [[ -n "$DTM_OUTPUT_JSON" ]] && return 0
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
+    [[ -n "$DTM_OUTPUT_JSON" || -n "$DTM_QUIET" ]] && return 0
+    echo -e "${GREEN}[SUCCESS]${NC_OUT} $1"
 }
 
 log_warn() {
     [[ -n "$DTM_OUTPUT_JSON" ]] && return 0
-    echo -e "${YELLOW}[WARN]${NC} $1"
+    echo -e "${YELLOW}[WARN]${NC_ERR} $1" >&2
 }
 
 log_error() {
-    if [[ -n "$DTM_OUTPUT_JSON" ]]; then
-        echo -e "${RED}[ERROR]${NC} $1" >&2
-        return 0
-    fi
-    echo -e "${RED}[ERROR]${NC} $1"
+    echo -e "${RED}[ERROR]${NC_ERR} $1" >&2
 }
 
 # Confirmation prompt that honours DTM_ASSUME_YES (--yes / -y).
@@ -326,7 +341,7 @@ show_usage() {
 DevTool Manager (dtm) - Manage development tools
 
 Usage:
-  dtm [--yes|-y] [--json] <command> [args]
+  dtm [--yes|-y] [--json] [--quiet|-q] <command> [args]
 
   dtm pull <tool> <version>       Download and install a tool version
   dtm set <tool> <version>        Set tool version globally (~/.dtmrc + current shell)
@@ -338,6 +353,7 @@ Usage:
   dtm remove <tool> <version>     Remove an installed version
   dtm doctor                      Diagnose dtm environment (deps, PATH, broken installs)
   dtm self-update                 Update dtm itself (git pull in install dir)
+  dtm uninstall                   Remove dtm itself (symlink, shell hooks, config)
   dtm config home [path]          Get or set the DTM_HOME directory
 
 Supported tools:
@@ -374,8 +390,11 @@ Examples:
   dtm config home /custom/path  Set DTM_HOME to /custom/path
 
 Global flags:
-  --yes, -y    Assume yes to confirmation prompts (CI/scripting).
-  --json       Emit JSON for current/list/available/doctor.
+  --yes, -y     Assume yes to confirmation prompts (CI/scripting).
+  --json        Emit JSON for current/list/available/doctor.
+  --quiet, -q   Suppress informational output (warnings/errors still print).
+
+Color is auto-disabled when stdout is piped or NO_COLOR is set.
 EOF
 }
 
@@ -764,6 +783,84 @@ self_update_command() {
     git -C "$install_dir" log --oneline "${before}..${after}"
 }
 
+# Strip lines matching a regex from a file. No-op if file missing or no match.
+# Uses dtm_sed_i for portability between GNU and BSD sed.
+dtm_strip_lines() {
+    local file="$1" pattern="$2"
+    [[ -f "$file" ]] || return 0
+    grep -qE "$pattern" "$file" 2>/dev/null || return 0
+    dtm_sed_i "/${pattern//\//\\/}/d" "$file"
+    log_info "  cleaned: $file"
+}
+
+# Uninstall — remove dtm shim symlinks, shell rc hooks, and configuration.
+# Leaves the dtm install directory (the git checkout) and DTM_ROOT untouched
+# unless the user explicitly opts in. Idempotent: safe to re-run.
+uninstall_command() {
+    local install_dir
+    install_dir="$(dtm_install_dir)"
+    log_info "dtm install dir: $install_dir (will not be deleted)"
+    log_info "DTM_ROOT:        $DTM_ROOT (will not be deleted unless requested)"
+
+    if ! dtm_confirm "Proceed with uninstall? (y/N): "; then
+        log_info "Aborted."
+        return 0
+    fi
+
+    log_info "[shim] removing ~/.local/bin/dtm"
+    if [[ -L "${HOME}/.local/bin/dtm" || -e "${HOME}/.local/bin/dtm" ]]; then
+        rm -f "${HOME}/.local/bin/dtm"
+        log_success "  removed"
+    else
+        log_info "  not present"
+    fi
+
+    log_info "[shell-rc] cleaning sourced hooks"
+    local rc
+    for rc in "${HOME}/.bashrc" "${HOME}/.zshrc" "${HOME}/.kshrc" \
+              "${HOME}/.config/fish/config.fish"; do
+        [[ -f "$rc" ]] || continue
+        # Match any line that references dtm.sh, dtm completion files, the
+        # ~/.dtmrc/.dtmconfig sourcing helpers, or the dtm header comments
+        # written by install.sh.
+        dtm_strip_lines "$rc" '^# DevTool Manager'
+        dtm_strip_lines "$rc" 'source.*dtm\.sh'
+        dtm_strip_lines "$rc" 'completions/dtm\.bash'
+        dtm_strip_lines "$rc" 'completions/_dtm'
+        dtm_strip_lines "$rc" 'completions/dtm\.fish'
+        dtm_strip_lines "$rc" 'source.*\.dtmrc'
+        dtm_strip_lines "$rc" 'source.*\.dtmconfig'
+    done
+
+    log_info "[completions] removing installed completion files"
+    local f
+    for f in "${HOME}/.zsh/completions/_dtm" \
+             "${HOME}/.config/fish/completions/dtm.fish"; do
+        if [[ -L "$f" || -e "$f" ]]; then
+            rm -f "$f"
+            log_success "  removed: $f"
+        fi
+    done
+
+    log_info "[config] removing $DTM_CONFIG and $DTM_SETTINGS"
+    rm -f "$DTM_CONFIG" "$DTM_SETTINGS"
+    log_success "  removed"
+
+    if [[ -d "$DTM_ROOT" ]]; then
+        if dtm_confirm "Also delete installed tools under $DTM_ROOT? (y/N): "; then
+            log_info "[home] removing $DTM_ROOT"
+            rm -rf "$DTM_ROOT"
+            log_success "  removed"
+        else
+            log_info "Kept $DTM_ROOT (delete manually if you wish)"
+        fi
+    fi
+
+    log_success "dtm uninstalled."
+    log_info "To finish: restart your shell (rc files were edited)."
+    log_info "The dtm checkout itself is still at: $install_dir"
+}
+
 # Config command handler
 config_command() {
     local subcommand="$1"
@@ -822,9 +919,10 @@ main() {
     local a
     for a in "$@"; do
         case "$a" in
-            -y|--yes) export DTM_ASSUME_YES=1 ;;
-            --json)   export DTM_OUTPUT_JSON=1 ;;
-            *)        args+=("$a") ;;
+            -y|--yes)   export DTM_ASSUME_YES=1 ;;
+            --json)     export DTM_OUTPUT_JSON=1 ;;
+            -q|--quiet) export DTM_QUIET=1 ;;
+            *)          args+=("$a") ;;
         esac
     done
     set -- "${args[@]}"
@@ -858,6 +956,12 @@ main() {
     # Handle self-update separately (no tool/version args, no module load)
     if [[ "$command" == "self-update" ]]; then
         self_update_command
+        exit 0
+    fi
+
+    # Handle uninstall separately (no tool/version args, no module load)
+    if [[ "$command" == "uninstall" ]]; then
+        uninstall_command
         exit 0
     fi
 

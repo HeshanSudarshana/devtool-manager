@@ -45,7 +45,7 @@ _dtm() {
         cword=$COMP_CWORD
     }
 
-    local commands="pull set use list current available update remove doctor self-update config"
+    local commands="pull set use list current available update remove doctor self-update uninstall config"
     local tools="java maven gradle go node python"
     local versioned_cmds="pull set use remove"
     local tool_only_cmds="list current available update"
@@ -58,7 +58,7 @@ _dtm() {
     local cmd="${words[1]}"
 
     case "$cmd" in
-        doctor|self-update)
+        doctor|self-update|uninstall)
             COMPREPLY=()
             return 0
             ;;

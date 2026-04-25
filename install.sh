@@ -7,6 +7,31 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="${HOME}/.local/bin"
 
+# Parse flags. --yes/-y skips interactive prompts (treats them as "no" unless
+# the prompt explicitly opts in via the flag). DTM_ASSUME_YES env also honored.
+ASSUME_YES="${DTM_ASSUME_YES:-}"
+for arg in "$@"; do
+    case "$arg" in
+        -y|--yes) ASSUME_YES=1 ;;
+    esac
+done
+
+# Prompt helper: returns 0 if the user answered yes (or --yes was passed),
+# 1 otherwise. Non-TTY stdin without --yes silently declines.
+confirm() {
+    local prompt="$1"
+    if [[ -n "$ASSUME_YES" ]]; then
+        return 0
+    fi
+    if [[ ! -t 0 ]]; then
+        return 1
+    fi
+    local reply
+    read -p "$prompt" -n 1 -r reply
+    echo
+    [[ $reply =~ ^[Yy]$ ]]
+}
+
 echo "Installing DevTool Manager (dtm)..."
 
 # Create installation directory if it doesn't exist
@@ -154,9 +179,7 @@ echo ""
 
 # Check for nvm
 if ! command -v nvm &> /dev/null && [ ! -s "$HOME/.nvm/nvm.sh" ]; then
-    read -p "Install nvm for Node.js management? (y/N): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
+    if confirm "Install nvm for Node.js management? (y/N): "; then
         echo "Installing nvm from master branch..."
         if curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/master/install.sh | bash; then
             echo "✓ nvm installed successfully"
@@ -175,9 +198,7 @@ echo ""
 
 # Check for pyenv
 if ! command -v pyenv &> /dev/null && [ ! -s "$HOME/.pyenv/bin/pyenv" ]; then
-    read -p "Install pyenv for Python management? (y/N): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
+    if confirm "Install pyenv for Python management? (y/N): "; then
         echo ""
         echo "Installing pyenv and build dependencies..."
         echo "Note: Unlike Node.js (pre-built binaries), Python must be compiled from source."

@@ -52,6 +52,7 @@ _dtm() {
         'remove:Remove an installed version'
         'doctor:Diagnose dtm environment'
         'self-update:Update dtm itself via git pull'
+        'uninstall:Remove dtm itself (symlink, hooks, config)'
         'config:Get or set dtm configuration'
     )
     tools=(java maven gradle go node python)
@@ -71,7 +72,7 @@ _dtm() {
             ;;
         arg2)
             case "${words[2]}" in
-                doctor|self-update)
+                doctor|self-update|uninstall)
                     ;;
                 config)
                     _values 'config subcommand' 'home[Get or set DTM_HOME]'
