@@ -196,6 +196,49 @@ list_maven() {
     done
 }
 
+# List available Maven versions from Apache.
+# Usage: available_maven [major_or_prefix]
+#   No arg     -> list recent releases (last 20).
+#   <prefix>   -> list all matching versions starting with that prefix
+#                 (e.g. "3" -> all 3.x, "3.9" -> all 3.9.x).
+available_maven() {
+    local filter="$1"
+    local metadata_url="https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/maven-metadata.xml"
+
+    log_info "Fetching available Maven versions..." >&2
+    local response
+    response=$(curl -fsSL --retry 3 --retry-delay 2 "$metadata_url" 2>/dev/null) || {
+        log_error "Failed to query Maven metadata" >&2
+        return 1
+    }
+
+    local versions
+    versions=$(echo "$response" \
+        | grep -o '<version>[^<]*</version>' \
+        | sed 's/<[^>]*>//g' \
+        | grep -v -- '-' \
+        | sort -V -u)
+
+    if [[ -z "$versions" ]]; then
+        log_error "No Maven versions parsed from metadata" >&2
+        return 1
+    fi
+
+    if [[ -n "$filter" ]]; then
+        local matched
+        matched=$(echo "$versions" | grep -E "^${filter//./\\.}(\$|\\.)" || true)
+        if [[ -z "$matched" ]]; then
+            log_warn "No Maven versions matching '$filter'"
+            return 1
+        fi
+        log_info "Available Maven versions matching '$filter':"
+        echo "$matched" | sed 's/^/    /'
+    else
+        log_info "Available Maven versions (most recent 20; pass a prefix to filter):"
+        echo "$versions" | tail -20 | sed 's/^/    /'
+    fi
+}
+
 # Print currently active Maven version (or fail if none)
 current_maven() {
     local current_maven_home="${MAVEN_HOME:-}"

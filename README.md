@@ -7,6 +7,8 @@ A command-line tool to manage development tools like JDK, Maven, Gradle, Go, Nod
 - **Pull**: Download and install specific versions of development tools
 - **Set**: Activate a specific version by setting environment variables (auto-applies to current shell!)
 - **List**: View all installed versions
+- **Current**: Show the active version of a tool
+- **Available**: Query the upstream registry for installable versions (java/maven/gradle/go)
 - **Remove**: Uninstall specific versions
 
 ## Supported Tools
@@ -240,6 +242,28 @@ dtm remove python 3.11.7
 - Can still use `pyenv` commands directly
 - See available versions: `pyenv install --list`
 
+### Listing available (installable) versions
+
+Query the upstream registry for versions you could install. Supported for `java`, `maven`, `gradle`, and `go`. For `node` and `python`, use `nvm ls-remote` and `pyenv install --list` directly.
+
+```bash
+# Java major releases on Temurin (LTS marked)
+dtm available java
+
+# All GA patch versions for a specific Java major
+dtm available java 21
+
+# Recent Maven / Gradle / Go releases
+dtm available maven
+dtm available gradle
+dtm available go
+
+# Filter by prefix
+dtm available maven 3.9
+dtm available gradle 8
+dtm available go 1.22
+```
+
 ## Directory Structure
 
 By default, all tools are installed under `~/development/devtools/` (configurable via `DTM_HOME`):
@@ -450,6 +474,8 @@ The modular structure makes it easy to add support for more tools. Each tool has
 - `pull_<tool>` - Download and install
 - `set_<tool>` - Activate version
 - `list_<tool>` - List installed versions
+- `current_<tool>` - Print the active version
+- `available_<tool>` - Query upstream for installable versions (optional)
 - `remove_<tool>` - Remove version
 
 ## License

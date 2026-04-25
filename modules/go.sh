@@ -245,6 +245,48 @@ list_go() {
     done
 }
 
+# List available Go versions from go.dev.
+# Usage: available_go [major_or_major_minor]
+#   No arg     -> list recent stable releases (last 20).
+#   <prefix>   -> list all stable versions starting with that prefix
+#                 (e.g. "1" or "1.22").
+available_go() {
+    local filter="$1"
+
+    log_info "Fetching available Go versions..." >&2
+    local response
+    response=$(curl -fsSL --retry 3 --retry-delay 2 \
+        "https://go.dev/dl/?mode=json&include=all" 2>/dev/null) || {
+        log_error "Failed to query go.dev download index" >&2
+        return 1
+    }
+
+    local versions
+    versions=$(echo "$response" \
+        | jq -r '.[] | select(.stable==true) | .version' 2>/dev/null \
+        | sed 's/^go//' \
+        | sort -V -u)
+
+    if [[ -z "$versions" ]]; then
+        log_error "No Go versions parsed from go.dev index" >&2
+        return 1
+    fi
+
+    if [[ -n "$filter" ]]; then
+        local matched
+        matched=$(echo "$versions" | grep -E "^${filter//./\\.}(\$|\\.)" || true)
+        if [[ -z "$matched" ]]; then
+            log_warn "No Go versions matching '$filter'"
+            return 1
+        fi
+        log_info "Available Go versions matching '$filter':"
+        echo "$matched" | sed 's/^/    /'
+    else
+        log_info "Available Go versions (most recent 20; pass a prefix to filter):"
+        echo "$versions" | tail -20 | sed 's/^/    /'
+    fi
+}
+
 # Print currently active Go version (or fail if none)
 current_go() {
     local current_goroot="${GOROOT:-}"

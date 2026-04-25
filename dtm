@@ -6,6 +6,7 @@
 #   dtm set <tool> <version>     - Set PATH and environment variables for a tool version
 #   dtm list <tool>              - List installed versions
 #   dtm current <tool>           - Print the active version of a tool
+#   dtm available <tool> [filter]- Query remote for installable versions
 #   dtm remove <tool> <version>  - Remove an installed version
 #   dtm config home [path]       - Get or set the DTM_HOME directory
 
@@ -229,6 +230,7 @@ Usage:
   dtm set <tool> <version>        Set PATH and environment for a tool
   dtm list <tool>                 List installed versions
   dtm current <tool>              Print the active version of a tool
+  dtm available <tool> [filter]   Query remote for installable versions
   dtm remove <tool> <version>     Remove an installed version
   dtm config home [path]          Get or set the DTM_HOME directory
 
@@ -246,6 +248,9 @@ Examples:
   dtm set java 11               Set Java 11 as active
   dtm list java                 List installed Java versions
   dtm current java              Show active Java version
+  dtm available java            List Java major releases on Temurin
+  dtm available java 21         List all Java 21 GA patch versions
+  dtm available go 1.22         List Go versions matching 1.22.x
   dtm config home               Show current DTM_HOME path
   dtm config home /custom/path  Set DTM_HOME to /custom/path
 EOF
@@ -439,6 +444,21 @@ main() {
                 go) current_go ;;
                 node) current_node ;;
                 python) current_python ;;
+                *) log_error "Unknown tool: $tool"; exit 1 ;;
+            esac
+            ;;
+        available)
+            dtm_check_deps
+            case "$tool" in
+                java) available_java "$version" ;;
+                maven) available_maven "$version" ;;
+                gradle) available_gradle "$version" ;;
+                go) available_go "$version" ;;
+                node|python)
+                    log_error "'available' is not supported for $tool"
+                    log_info "Use the upstream tool: 'nvm ls-remote' for node, 'pyenv install --list' for python"
+                    exit 1
+                    ;;
                 *) log_error "Unknown tool: $tool"; exit 1 ;;
             esac
             ;;

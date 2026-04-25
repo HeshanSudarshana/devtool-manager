@@ -214,6 +214,48 @@ list_gradle() {
     done
 }
 
+# List available Gradle versions from services.gradle.org.
+# Usage: available_gradle [major_or_major_minor]
+#   No arg     -> list recent stable releases (last 20).
+#   <prefix>   -> list all stable versions starting with that prefix
+#                 (e.g. "8" or "8.5").
+available_gradle() {
+    local filter="$1"
+
+    log_info "Fetching available Gradle versions..." >&2
+    local response
+    response=$(curl -fsSL --retry 3 --retry-delay 2 \
+        "https://services.gradle.org/versions/all" 2>/dev/null) || {
+        log_error "Failed to query Gradle versions API" >&2
+        return 1
+    }
+
+    local versions
+    versions=$(echo "$response" \
+        | jq -r '.[] | select(.snapshot==false and .nightly==false and .broken==false and .rcFor=="" and .milestoneFor=="") | .version' \
+        2>/dev/null \
+        | sort -V -u)
+
+    if [[ -z "$versions" ]]; then
+        log_error "No Gradle versions parsed from API" >&2
+        return 1
+    fi
+
+    if [[ -n "$filter" ]]; then
+        local matched
+        matched=$(echo "$versions" | grep -E "^${filter//./\\.}(\$|\\.)" || true)
+        if [[ -z "$matched" ]]; then
+            log_warn "No Gradle versions matching '$filter'"
+            return 1
+        fi
+        log_info "Available Gradle versions matching '$filter':"
+        echo "$matched" | sed 's/^/    /'
+    else
+        log_info "Available Gradle versions (most recent 20; pass a prefix to filter):"
+        echo "$versions" | tail -20 | sed 's/^/    /'
+    fi
+}
+
 # Print currently active Gradle version (or fail if none)
 current_gradle() {
     local current_gradle_home="${GRADLE_HOME:-}"

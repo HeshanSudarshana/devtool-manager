@@ -217,6 +217,67 @@ list_java() {
     done
 }
 
+# List available Java versions from Temurin.
+# Usage: available_java [major_version]
+#   No arg  -> list available major (GA) releases, marking LTS.
+#   <major> -> list all GA patch versions for that major.
+available_java() {
+    local major_version="$1"
+    local response
+
+    if [[ -z "$major_version" ]]; then
+        log_info "Fetching available Java major releases from Temurin..." >&2
+        response=$(curl -fsSL --retry 3 --retry-delay 2 \
+            "https://api.adoptium.net/v3/info/available_releases" 2>/dev/null) || {
+            log_error "Failed to query Temurin API" >&2
+            return 1
+        }
+
+        local lts_csv
+        lts_csv=$(echo "$response" | jq -r '.available_lts_releases | join(",")')
+        log_info "Available Java major releases (LTS marked with *):"
+        echo "$response" \
+            | jq -r '.available_releases[]' \
+            | sort -n \
+            | while read -r v; do
+                if [[ ",$lts_csv," == *",$v,"* ]]; then
+                    echo "  * $v (LTS)"
+                else
+                    echo "    $v"
+                fi
+            done
+        return 0
+    fi
+
+    if ! [[ "$major_version" =~ ^[0-9]+$ ]]; then
+        log_error "Java filter must be a major version number (e.g. 11, 17, 21)"
+        return 1
+    fi
+
+    log_info "Fetching available Java $major_version GA versions from Temurin..." >&2
+    local next=$((major_version + 1))
+    local url="https://api.adoptium.net/v3/info/release_versions"
+    url="${url}?release_type=ga&page_size=50&sort_method=DEFAULT&sort_order=DESC"
+    url="${url}&version=%5B${major_version}%2C${next}%29"
+
+    response=$(curl -fsSL --retry 3 --retry-delay 2 "$url" 2>/dev/null) || {
+        log_error "Failed to query Temurin API" >&2
+        return 1
+    }
+
+    local versions
+    versions=$(echo "$response" | jq -r '.versions[].semver | split("+")[0]' 2>/dev/null \
+        | sort -V -u)
+
+    if [[ -z "$versions" ]]; then
+        log_warn "No GA versions found for Java $major_version"
+        return 1
+    fi
+
+    log_info "Available Java $major_version GA versions:"
+    echo "$versions" | sed 's/^/    /'
+}
+
 # Print currently active Java version (or fail if none)
 current_java() {
     local current_java_home="${JAVA_HOME:-}"
