@@ -11,6 +11,7 @@
 #   dtm update <tool>            - Bump active install to latest patch in series
 #   dtm remove <tool> <version>  - Remove an installed version
 #   dtm doctor                   - Diagnose dtm environment (deps, PATH, installs)
+#   dtm self-update              - Update dtm itself (git pull in install dir)
 #   dtm config home [path]       - Get or set the DTM_HOME directory
 
 set -e
@@ -238,6 +239,7 @@ Usage:
   dtm update <tool>               Bump active install to latest patch in current series
   dtm remove <tool> <version>     Remove an installed version
   dtm doctor                      Diagnose dtm environment (deps, PATH, broken installs)
+  dtm self-update                 Update dtm itself (git pull in install dir)
   dtm config home [path]          Get or set the DTM_HOME directory
 
 Supported tools:
@@ -260,6 +262,7 @@ Examples:
   dtm available go 1.22         List Go versions matching 1.22.x
   dtm update java               Bump active Java to latest patch in major series
   dtm doctor                    Diagnose dtm install (deps, PATH, broken installs)
+  dtm self-update               Pull latest dtm from its git remote
   dtm config home               Show current DTM_HOME path
   dtm config home /custom/path  Set DTM_HOME to /custom/path
 EOF
@@ -462,6 +465,65 @@ doctor_command() {
     log_success "doctor: 0 errors, $warnings warning(s)"
 }
 
+# Resolve dtm's install directory by following BASH_SOURCE through any symlinks.
+dtm_install_dir() {
+    local script_path="${BASH_SOURCE[0]}"
+    while [ -L "$script_path" ]; do
+        local link_target
+        link_target="$(readlink "$script_path")"
+        if [[ "$link_target" = /* ]]; then
+            script_path="$link_target"
+        else
+            script_path="$(cd "$(dirname "$script_path")" && pwd)/$link_target"
+        fi
+    done
+    cd "$(dirname "$script_path")" && pwd
+}
+
+# Self-update — git pull in dtm's install directory.
+self_update_command() {
+    if ! command -v git >/dev/null 2>&1; then
+        log_error "git is required for self-update"
+        exit 1
+    fi
+
+    local install_dir
+    install_dir="$(dtm_install_dir)"
+    log_info "dtm install dir: $install_dir"
+
+    if [[ ! -d "$install_dir/.git" ]]; then
+        log_error "Not a git checkout: $install_dir"
+        log_info "self-update requires dtm to be installed via 'git clone'"
+        exit 1
+    fi
+
+    if ! git -C "$install_dir" diff --quiet || ! git -C "$install_dir" diff --cached --quiet; then
+        log_error "Uncommitted changes in $install_dir"
+        log_info "Commit, stash, or reset them before self-update"
+        exit 1
+    fi
+
+    local before after branch
+    branch="$(git -C "$install_dir" rev-parse --abbrev-ref HEAD)"
+    before="$(git -C "$install_dir" rev-parse HEAD)"
+    log_info "Pulling on branch '$branch'..."
+
+    if ! git -C "$install_dir" pull --ff-only; then
+        log_error "git pull failed (non-fast-forward or network error)"
+        exit 1
+    fi
+
+    after="$(git -C "$install_dir" rev-parse HEAD)"
+    if [[ "$before" == "$after" ]]; then
+        log_success "Already up to date ($before)"
+        return 0
+    fi
+
+    log_success "Updated $branch: ${before:0:12} -> ${after:0:12}"
+    log_info "Changes:"
+    git -C "$install_dir" log --oneline "${before}..${after}"
+}
+
 # Config command handler
 config_command() {
     local subcommand="$1"
@@ -537,6 +599,12 @@ main() {
         detect_platform
         source_modules
         doctor_command
+        exit 0
+    fi
+
+    # Handle self-update separately (no tool/version args, no module load)
+    if [[ "$command" == "self-update" ]]; then
+        self_update_command
         exit 0
     fi
 
