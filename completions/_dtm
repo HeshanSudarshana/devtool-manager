@@ -32,6 +32,8 @@ _dtm_installed_versions() {
     [[ -d "$root" ]] || return 0
     local -a versions=()
     for dir in "$root"/*(N/); do
+        # Skip the active-version symlink (`current/`).
+        [[ -L "${dir%/}" ]] && continue
         versions+=("${dir:t}")
     done
     print -r -- "${versions[@]}"

@@ -88,9 +88,7 @@ pull_go() {
 
     if [[ -d "$install_dir" ]]; then
         log_warn "Go $exact_version is already installed at $install_dir"
-        read -p "Do you want to reinstall? (y/N): " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        if ! dtm_confirm "Do you want to reinstall? (y/N): "; then
             log_info "Installation cancelled"
             dtm_release_lock "$lock_path"
             trap - EXIT INT TERM
@@ -161,7 +159,7 @@ set_go() {
     # Find matching installation
     local install_dir=""
 
-    if [[ -d "${GO_ROOT}/${version}" ]]; then
+    if [[ -d "${GO_ROOT}/${version}" && ! -L "${GO_ROOT}/${version}" ]]; then
         install_dir="${GO_ROOT}/${version}"
     else
         local major_minor matching_dirs
@@ -199,10 +197,16 @@ set_go() {
         mkdir -p "$(dirname "$DTM_CONFIG")"
         dtm_clean_dtmrc_for "GOROOT" "/go/.*/bin"
         dtm_clean_dtmrc_for "GOPATH"
+        dtm_set_current_symlink "$GO_ROOT" "$install_dir"
+        # Mirror the symlink for the workspace so GOPATH is also stable.
+        mkdir -p "$GO_WORKSPACE_ROOT"
+        ln -sfn "$workspace_dir" "${GO_WORKSPACE_ROOT}/current"
 
+        local stable_root="${GO_ROOT}/current"
+        local stable_path="${GO_WORKSPACE_ROOT}/current"
         cat >> "$DTM_CONFIG" << EOF
-export GOROOT="${install_dir}"
-export GOPATH="${workspace_dir}"
+export GOROOT="${stable_root}"
+export GOPATH="${stable_path}"
 export PATH="\${GOROOT}/bin:\${GOPATH}/bin:\${PATH}"
 EOF
 
@@ -218,8 +222,14 @@ EOF
         fi
 
         log_info "Applying changes to current shell..." >&2
+
+        echo "export GOROOT=\"${stable_root}\""
+        echo "export GOPATH=\"${stable_path}\""
+        echo "export PATH=\"\${GOROOT}/bin:\${GOPATH}/bin:\${PATH}\""
+        return 0
     fi
 
+    # `use` mode: per-shell only — direct paths, leave the symlinks alone.
     echo "export GOROOT=\"${install_dir}\""
     echo "export GOPATH=\"${workspace_dir}\""
     echo "export PATH=\"\${GOROOT}/bin:\${GOPATH}/bin:\${PATH}\""
@@ -228,18 +238,40 @@ EOF
 # List installed Go versions
 list_go() {
     if [[ ! -d "$GO_ROOT" ]]; then
-        log_info "No Go versions installed"
+        if [[ -n "$DTM_OUTPUT_JSON" ]]; then echo "[]"; else log_info "No Go versions installed"; fi
         return 0
     fi
-    
-    log_info "Installed Go versions:"
-    
+
     local current_goroot="${GOROOT:-}"
-    
+    local active_resolved=""
+    [[ -n "$current_goroot" && -e "$current_goroot" ]] && \
+        active_resolved="$(dtm_resolved_path "$current_goroot")"
+
+    if [[ -n "$DTM_OUTPUT_JSON" ]]; then
+        local entries=()
+        local dir version active
+        for dir in "$GO_ROOT"/*; do
+            [[ -L "$dir" ]] && continue
+            [[ -d "$dir" && -f "$dir/bin/go" ]] || continue
+            version=$(basename "$dir")
+            active=false
+            [[ "$dir" == "$active_resolved" ]] && active=true
+            entries+=("$(jq -nc \
+                --arg version "$version" \
+                --arg path "$dir" \
+                --argjson active "$active" \
+                '{version:$version,path:$path,active:$active}')")
+        done
+        if (( ${#entries[@]} == 0 )); then echo "[]"; else printf '%s\n' "${entries[@]}" | jq -s .; fi
+        return 0
+    fi
+
+    log_info "Installed Go versions:"
     for dir in "$GO_ROOT"/*; do
+        [[ -L "$dir" ]] && continue
         if [[ -d "$dir" && -f "$dir/bin/go" ]]; then
             local version=$(basename "$dir")
-            if [[ "$dir" == "$current_goroot" ]]; then
+            if [[ "$dir" == "$active_resolved" ]]; then
                 echo -e "  ${GREEN}* $version${NC} (active)"
             else
                 echo "    $version"
@@ -279,14 +311,14 @@ available_go() {
         local matched
         matched=$(echo "$versions" | grep -E "^${filter//./\\.}(\$|\\.)" || true)
         if [[ -z "$matched" ]]; then
-            log_warn "No Go versions matching '$filter'"
+            if [[ -n "$DTM_OUTPUT_JSON" ]]; then echo "[]"; else log_warn "No Go versions matching '$filter'"; fi
             return 1
         fi
         log_info "Available Go versions matching '$filter':"
-        echo "$matched" | sed 's/^/    /'
+        echo "$matched" | dtm_emit_version_list
     else
         log_info "Available Go versions (most recent 20; pass a prefix to filter):"
-        echo "$versions" | tail -20 | sed 's/^/    /'
+        echo "$versions" | tail -20 | dtm_emit_version_list
     fi
 }
 
@@ -305,13 +337,32 @@ current_go() {
         log_warn "Active Go install is missing: $current_goroot" >&2
         return 1
     fi
-    basename "$current_goroot"
+    local resolved version
+    resolved="$(dtm_resolved_path "$current_goroot")"
+    version="$(basename "$resolved")"
+    if [[ -n "$DTM_OUTPUT_JSON" ]]; then
+        local gopath="${GOPATH:-}"
+        local gopath_resolved=""
+        [[ -n "$gopath" && -e "$gopath" ]] && gopath_resolved="$(dtm_resolved_path "$gopath")"
+        jq -nc \
+            --arg tool "go" \
+            --arg version "$version" \
+            --arg path "$resolved" \
+            --arg link "$current_goroot" \
+            --arg gopath "$gopath_resolved" \
+            --arg gopath_link "$gopath" \
+            '{tool:$tool,version:$version,path:$path,link:$link,
+              gopath: (if $gopath == "" then null else $gopath end),
+              gopath_link: (if $gopath_link == "" then null else $gopath_link end)}'
+        return 0
+    fi
+    echo "$version"
 }
 
 # Update active Go to latest patch in current major.minor series.
 update_go() {
     local current major_minor latest install_dir
-    current=$(current_go) || {
+    current=$(DTM_OUTPUT_JSON= current_go) || {
         log_error "No active Go version to update"
         exit 1
     }
@@ -356,10 +407,21 @@ remove_go() {
     if [[ -d "$workspace_dir" ]]; then
         log_warn "  - $workspace_dir (workspace with dependencies)"
     fi
-    read -p "Are you sure? (y/N): " -n 1 -r
-    echo
-    
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
+    if dtm_confirm "Are you sure? (y/N): "; then
+        if [[ -L "${GO_ROOT}/current" ]]; then
+            local cur_target
+            cur_target="$(dtm_resolved_path "${GO_ROOT}/current" 2>/dev/null || true)"
+            if [[ "$cur_target" == "$install_dir" ]]; then
+                rm -f "${GO_ROOT}/current"
+            fi
+        fi
+        if [[ -L "${GO_WORKSPACE_ROOT}/current" ]]; then
+            local cur_ws
+            cur_ws="$(dtm_resolved_path "${GO_WORKSPACE_ROOT}/current" 2>/dev/null || true)"
+            if [[ "$cur_ws" == "$workspace_dir" ]]; then
+                rm -f "${GO_WORKSPACE_ROOT}/current"
+            fi
+        fi
         rm -rf "$install_dir"
         if [[ -d "$workspace_dir" ]]; then
             rm -rf "$workspace_dir"

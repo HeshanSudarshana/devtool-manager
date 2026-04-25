@@ -28,6 +28,8 @@ _dtm_installed_versions() {
     [[ -d "$root" ]] || return 0
     for dir in "$root"/*/; do
         [[ -d "$dir" ]] || continue
+        # Skip the active-version symlink (`current/`).
+        [[ -L "${dir%/}" ]] && continue
         name="${dir%/}"
         printf '%s\n' "${name##*/}"
     done

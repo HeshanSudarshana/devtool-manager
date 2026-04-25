@@ -150,19 +150,21 @@ _temurin_available() {
             log_error "Failed to query Temurin API" >&2
             return 1
         }
-        local lts_csv
+        local versions lts_csv
+        versions=$(echo "$response" | jq -r '.available_releases[]' | sort -n)
+        if [[ -n "$DTM_OUTPUT_JSON" ]]; then
+            echo "$versions" | dtm_json_string_array
+            return 0
+        fi
         lts_csv=$(echo "$response" | jq -r '.available_lts_releases | join(",")')
         log_info "Available Temurin major releases (LTS marked with *):"
-        echo "$response" \
-            | jq -r '.available_releases[]' \
-            | sort -n \
-            | while read -r v; do
-                if [[ ",$lts_csv," == *",$v,"* ]]; then
-                    echo "  * $v (LTS)"
-                else
-                    echo "    $v"
-                fi
-            done
+        echo "$versions" | while read -r v; do
+            if [[ ",$lts_csv," == *",$v,"* ]]; then
+                echo "  * $v (LTS)"
+            else
+                echo "    $v"
+            fi
+        done
         return 0
     fi
 
@@ -186,11 +188,11 @@ _temurin_available() {
     versions=$(echo "$response" | jq -r '.versions[].semver | split("+")[0]' \
         | sort -V -u)
     if [[ -z "$versions" ]]; then
-        log_warn "No GA versions found for Temurin $major_version"
+        if [[ -n "$DTM_OUTPUT_JSON" ]]; then echo "[]"; else log_warn "No GA versions found for Temurin $major_version"; fi
         return 1
     fi
     log_info "Available Temurin $major_version GA versions:"
-    echo "$versions" | sed 's/^/    /'
+    echo "$versions" | dtm_emit_version_list
 }
 
 # ---------------------------------------------------------------------------
@@ -279,7 +281,7 @@ _zulu_available() {
         }
         log_info "Available Zulu major releases:"
         echo "$response" | jq -r '[.[].java_version[0]] | unique[]' | sort -n \
-            | sed 's/^/    /'
+            | dtm_emit_version_list
         return 0
     fi
 
@@ -302,11 +304,11 @@ _zulu_available() {
     local versions
     versions=$(echo "$response" | jq -r '.[].java_version | join(".")' | sort -V -u)
     if [[ -z "$versions" ]]; then
-        log_warn "No GA versions found for Zulu $major_version"
+        if [[ -n "$DTM_OUTPUT_JSON" ]]; then echo "[]"; else log_warn "No GA versions found for Zulu $major_version"; fi
         return 1
     fi
     log_info "Available Zulu $major_version GA versions:"
-    echo "$versions" | sed 's/^/    /'
+    echo "$versions" | dtm_emit_version_list
 }
 
 # ---------------------------------------------------------------------------
@@ -397,6 +399,10 @@ _corretto_available() {
     local major_version="$1"
     if [[ -n "$major_version" ]]; then
         log_warn "Corretto only supports the current latest of each major; ignoring filter '$major_version'" >&2
+    fi
+    if [[ -n "$DTM_OUTPUT_JSON" ]]; then
+        printf '%s\n' 8 11 17 21 | dtm_json_string_array
+        return 0
     fi
     log_info "Corretto-supported majors (per corretto-N repos on GitHub):"
     echo "    8  (corretto-8)"
@@ -503,7 +509,7 @@ _liberica_available() {
         }
         log_info "Available Liberica major releases:"
         echo "$response" | jq -r '[.[].featureVersion] | unique[]' | sort -n \
-            | sed 's/^/    /'
+            | dtm_emit_version_list
         return 0
     fi
 
@@ -524,11 +530,11 @@ _liberica_available() {
     local versions
     versions=$(echo "$response" | jq -r '.[] | select(.GA == true) | .version' | sort -V -u)
     if [[ -z "$versions" ]]; then
-        log_warn "No GA versions found for Liberica $major_version"
+        if [[ -n "$DTM_OUTPUT_JSON" ]]; then echo "[]"; else log_warn "No GA versions found for Liberica $major_version"; fi
         return 1
     fi
     log_info "Available Liberica $major_version GA versions:"
-    echo "$versions" | sed 's/^/    /'
+    echo "$versions" | dtm_emit_version_list
 }
 
 # ---------------------------------------------------------------------------
@@ -591,9 +597,7 @@ pull_java() {
 
     if [[ -d "$install_dir" ]]; then
         log_warn "$dist $exact_version is already installed at $install_dir"
-        read -p "Do you want to reinstall? (y/N): " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        if ! dtm_confirm "Do you want to reinstall? (y/N): "; then
             log_info "Installation cancelled"
             dtm_release_lock "$lock_path"
             trap - EXIT INT TERM
@@ -663,7 +667,7 @@ pull_java() {
 _resolve_installed_java() {
     local dist="$1" version="$2"
     local exact_dir="${JAVA_ROOT}/$(java_dir_name "$dist" "$version")"
-    if [[ -d "$exact_dir" ]]; then
+    if [[ -d "$exact_dir" && ! -L "$exact_dir" ]]; then
         echo "$exact_dir"
         return 0
     fi
@@ -677,6 +681,7 @@ _resolve_installed_java() {
         pattern="${dist}-${major}.*"
     fi
     local match
+    # -type d skips the `current` symlink already.
     match=$(find "$JAVA_ROOT" -maxdepth 1 -mindepth 1 -type d -name "$pattern" 2>/dev/null | sort -V | tail -1)
     if [[ -n "$match" ]]; then
         echo "$match"
@@ -710,9 +715,11 @@ set_java() {
 
         mkdir -p "$(dirname "$DTM_CONFIG")"
         dtm_clean_dtmrc_for "JAVA_HOME" "/java/.*/bin"
+        dtm_set_current_symlink "$JAVA_ROOT" "$install_dir"
 
+        local stable_path="${JAVA_ROOT}/current"
         cat >> "$DTM_CONFIG" << EOF
-export JAVA_HOME="${install_dir}"
+export JAVA_HOME="${stable_path}"
 export PATH="\${JAVA_HOME}/bin:\${PATH}"
 EOF
 
@@ -726,8 +733,14 @@ EOF
         fi
 
         log_info "Applying changes to current shell..." >&2
+
+        echo "export JAVA_HOME=\"${stable_path}\""
+        echo "export PATH=\"\${JAVA_HOME}/bin:\${PATH}\""
+        return 0
     fi
 
+    # `use` mode: per-shell only — emit direct install path, do not touch the
+    # global symlink (other shells may rely on it).
     echo "export JAVA_HOME=\"${install_dir}\""
     echo "export PATH=\"\${JAVA_HOME}/bin:\${PATH}\""
 }
@@ -735,21 +748,48 @@ EOF
 # List installed Java versions (all distributions).
 list_java() {
     if [[ ! -d "$JAVA_ROOT" ]]; then
-        log_info "No Java versions installed"
+        if [[ -n "$DTM_OUTPUT_JSON" ]]; then echo "[]"; else log_info "No Java versions installed"; fi
+        return 0
+    fi
+
+    local current_java_home="${JAVA_HOME:-}"
+    local active_resolved=""
+    [[ -n "$current_java_home" && -e "$current_java_home" ]] && \
+        active_resolved="$(dtm_resolved_path "$current_java_home")"
+
+    local dir name dist version label
+
+    if [[ -n "$DTM_OUTPUT_JSON" ]]; then
+        local entries=()
+        for dir in "$JAVA_ROOT"/*; do
+            [[ -L "$dir" ]] && continue
+            [[ -d "$dir" && -f "$dir/bin/java" ]] || continue
+            name=$(basename "$dir")
+            dist=$(java_dir_dist "$name")
+            version=$(java_dir_version "$name")
+            local active=false
+            [[ "$dir" == "$active_resolved" ]] && active=true
+            entries+=("$(jq -nc \
+                --arg dist "$dist" \
+                --arg version "$version" \
+                --arg dir "$name" \
+                --arg path "$dir" \
+                --argjson active "$active" \
+                '{dist:$dist,version:$version,dir:$dir,path:$path,active:$active}')")
+        done
+        if (( ${#entries[@]} == 0 )); then echo "[]"; else printf '%s\n' "${entries[@]}" | jq -s .; fi
         return 0
     fi
 
     log_info "Installed Java versions:"
-    local current_java_home="${JAVA_HOME:-}"
-    local dir name dist version label
-
     for dir in "$JAVA_ROOT"/*; do
+        [[ -L "$dir" ]] && continue
         [[ -d "$dir" && -f "$dir/bin/java" ]] || continue
         name=$(basename "$dir")
         dist=$(java_dir_dist "$name")
         version=$(java_dir_version "$name")
         label="${dist}@${version}    ($name)"
-        if [[ "$dir" == "$current_java_home" ]]; then
+        if [[ "$dir" == "$active_resolved" ]]; then
             echo -e "  ${GREEN}* ${label}${NC} (active)"
         else
             echo "    ${label}"
@@ -816,10 +856,22 @@ current_java() {
         log_warn "Active Java install is missing: $current_java_home" >&2
         return 1
     fi
-    local name dist version
-    name=$(basename "$current_java_home")
+    local resolved name dist version
+    resolved="$(dtm_resolved_path "$current_java_home")"
+    name=$(basename "$resolved")
     dist=$(java_dir_dist "$name")
     version=$(java_dir_version "$name")
+    if [[ -n "$DTM_OUTPUT_JSON" ]]; then
+        jq -nc \
+            --arg tool "java" \
+            --arg dist "$dist" \
+            --arg version "$version" \
+            --arg dir "$name" \
+            --arg path "$resolved" \
+            --arg link "$current_java_home" \
+            '{tool:$tool,dist:$dist,version:$version,dir:$dir,path:$path,link:$link}'
+        return 0
+    fi
     echo "${dist}@${version}"
 }
 
@@ -846,7 +898,7 @@ update_java() {
     fi
 
     install_dir="${JAVA_ROOT}/$(java_dir_name "$dist" "$latest")"
-    if [[ ! -d "$install_dir" ]]; then
+    if [[ ! -d "$install_dir" || -L "$install_dir" ]]; then
         pull_java "${dist}@${latest}"
     else
         log_info "${dist}@${latest} already installed; switching only" >&2
@@ -869,10 +921,15 @@ remove_java() {
     }
 
     log_warn "About to remove $(basename "$install_dir") from $install_dir"
-    read -p "Are you sure? (y/N): " -n 1 -r
-    echo
-
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
+    if dtm_confirm "Are you sure? (y/N): "; then
+        # If `current` symlink points at this dir, drop it too.
+        if [[ -L "${JAVA_ROOT}/current" ]]; then
+            local cur_target
+            cur_target="$(dtm_resolved_path "${JAVA_ROOT}/current" 2>/dev/null || true)"
+            if [[ "$cur_target" == "$install_dir" ]]; then
+                rm -f "${JAVA_ROOT}/current"
+            fi
+        fi
         rm -rf "$install_dir"
         log_success "$(basename "$install_dir") removed"
     else

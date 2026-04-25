@@ -70,9 +70,7 @@ pull_gradle() {
 
     if [[ -d "$install_dir" ]]; then
         log_warn "Gradle $exact_version is already installed at $install_dir"
-        read -p "Do you want to reinstall? (y/N): " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        if ! dtm_confirm "Do you want to reinstall? (y/N): "; then
             log_info "Installation cancelled"
             dtm_release_lock "$lock_path"
             trap - EXIT INT TERM
@@ -144,7 +142,7 @@ set_gradle() {
     # Find matching installation
     local install_dir=""
 
-    if [[ -d "${GRADLE_ROOT}/${version}" ]]; then
+    if [[ -d "${GRADLE_ROOT}/${version}" && ! -L "${GRADLE_ROOT}/${version}" ]]; then
         install_dir="${GRADLE_ROOT}/${version}"
     else
         local major_minor matching_dirs
@@ -170,9 +168,11 @@ set_gradle() {
 
         mkdir -p "$(dirname "$DTM_CONFIG")"
         dtm_clean_dtmrc_for "GRADLE_HOME" "/gradle/.*/bin"
+        dtm_set_current_symlink "$GRADLE_ROOT" "$install_dir"
 
+        local stable_path="${GRADLE_ROOT}/current"
         cat >> "$DTM_CONFIG" << EOF
-export GRADLE_HOME="${install_dir}"
+export GRADLE_HOME="${stable_path}"
 export PATH="\${GRADLE_HOME}/bin:\${PATH}"
 EOF
 
@@ -186,8 +186,13 @@ EOF
         fi
 
         log_info "Applying changes to current shell..." >&2
+
+        echo "export GRADLE_HOME=\"${stable_path}\""
+        echo "export PATH=\"\${GRADLE_HOME}/bin:\${PATH}\""
+        return 0
     fi
 
+    # `use` mode: per-shell only — direct path, leave the symlink alone.
     echo "export GRADLE_HOME=\"${install_dir}\""
     echo "export PATH=\"\${GRADLE_HOME}/bin:\${PATH}\""
 }
@@ -195,18 +200,40 @@ EOF
 # List installed Gradle versions
 list_gradle() {
     if [[ ! -d "$GRADLE_ROOT" ]]; then
-        log_info "No Gradle versions installed"
+        if [[ -n "$DTM_OUTPUT_JSON" ]]; then echo "[]"; else log_info "No Gradle versions installed"; fi
         return 0
     fi
-    
-    log_info "Installed Gradle versions:"
-    
+
     local current_gradle_home="${GRADLE_HOME:-}"
-    
+    local active_resolved=""
+    [[ -n "$current_gradle_home" && -e "$current_gradle_home" ]] && \
+        active_resolved="$(dtm_resolved_path "$current_gradle_home")"
+
+    if [[ -n "$DTM_OUTPUT_JSON" ]]; then
+        local entries=()
+        local dir version active
+        for dir in "$GRADLE_ROOT"/*; do
+            [[ -L "$dir" ]] && continue
+            [[ -d "$dir" && -f "$dir/bin/gradle" ]] || continue
+            version=$(basename "$dir")
+            active=false
+            [[ "$dir" == "$active_resolved" ]] && active=true
+            entries+=("$(jq -nc \
+                --arg version "$version" \
+                --arg path "$dir" \
+                --argjson active "$active" \
+                '{version:$version,path:$path,active:$active}')")
+        done
+        if (( ${#entries[@]} == 0 )); then echo "[]"; else printf '%s\n' "${entries[@]}" | jq -s .; fi
+        return 0
+    fi
+
+    log_info "Installed Gradle versions:"
     for dir in "$GRADLE_ROOT"/*; do
+        [[ -L "$dir" ]] && continue
         if [[ -d "$dir" && -f "$dir/bin/gradle" ]]; then
             local version=$(basename "$dir")
-            if [[ "$dir" == "$current_gradle_home" ]]; then
+            if [[ "$dir" == "$active_resolved" ]]; then
                 echo -e "  ${GREEN}* $version${NC} (active)"
             else
                 echo "    $version"
@@ -246,14 +273,14 @@ available_gradle() {
         local matched
         matched=$(echo "$versions" | grep -E "^${filter//./\\.}(\$|\\.)" || true)
         if [[ -z "$matched" ]]; then
-            log_warn "No Gradle versions matching '$filter'"
+            if [[ -n "$DTM_OUTPUT_JSON" ]]; then echo "[]"; else log_warn "No Gradle versions matching '$filter'"; fi
             return 1
         fi
         log_info "Available Gradle versions matching '$filter':"
-        echo "$matched" | sed 's/^/    /'
+        echo "$matched" | dtm_emit_version_list
     else
         log_info "Available Gradle versions (most recent 20; pass a prefix to filter):"
-        echo "$versions" | tail -20 | sed 's/^/    /'
+        echo "$versions" | tail -20 | dtm_emit_version_list
     fi
 }
 
@@ -272,13 +299,25 @@ current_gradle() {
         log_warn "Active Gradle install is missing: $current_gradle_home" >&2
         return 1
     fi
-    basename "$current_gradle_home"
+    local resolved version
+    resolved="$(dtm_resolved_path "$current_gradle_home")"
+    version="$(basename "$resolved")"
+    if [[ -n "$DTM_OUTPUT_JSON" ]]; then
+        jq -nc \
+            --arg tool "gradle" \
+            --arg version "$version" \
+            --arg path "$resolved" \
+            --arg link "$current_gradle_home" \
+            '{tool:$tool,version:$version,path:$path,link:$link}'
+        return 0
+    fi
+    echo "$version"
 }
 
 # Update active Gradle to latest patch in current major.minor series.
 update_gradle() {
     local current major_minor latest install_dir
-    current=$(current_gradle) || {
+    current=$(DTM_OUTPUT_JSON= current_gradle) || {
         log_error "No active Gradle version to update"
         exit 1
     }
@@ -318,10 +357,14 @@ remove_gradle() {
     fi
     
     log_warn "About to remove Gradle $version from $install_dir"
-    read -p "Are you sure? (y/N): " -n 1 -r
-    echo
-    
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
+    if dtm_confirm "Are you sure? (y/N): "; then
+        if [[ -L "${GRADLE_ROOT}/current" ]]; then
+            local cur_target
+            cur_target="$(dtm_resolved_path "${GRADLE_ROOT}/current" 2>/dev/null || true)"
+            if [[ "$cur_target" == "$install_dir" ]]; then
+                rm -f "${GRADLE_ROOT}/current"
+            fi
+        fi
         rm -rf "$install_dir"
         log_success "Gradle $version removed"
     else

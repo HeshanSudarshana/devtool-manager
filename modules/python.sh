@@ -28,10 +28,16 @@ ensure_pyenv() {
         echo "" >&2
         log_info "pyenv is required for Python management" >&2
         echo "" >&2
-        read -p "Would you like to install pyenv now? (y/N): " -n 1 -r >&2
-        echo "" >&2
-        
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
+        local _install_pyenv=0
+        if [[ -n "$DTM_ASSUME_YES" ]]; then
+            _install_pyenv=1
+        elif [[ -t 0 ]]; then
+            read -p "Would you like to install pyenv now? (y/N): " -n 1 -r >&2
+            echo "" >&2
+            [[ $REPLY =~ ^[Yy]$ ]] && _install_pyenv=1
+        fi
+
+        if (( _install_pyenv == 1 )); then
             log_info "Installing pyenv..." >&2
             log_warn "Note: Unlike Node.js, Python must be compiled from source" >&2
             log_warn "Build tools and libraries are required for compilation" >&2
@@ -212,10 +218,28 @@ list_python() {
     if ! ensure_pyenv; then
         exit 1
     fi
-    
+
+    if [[ -n "$DTM_OUTPUT_JSON" ]]; then
+        local active versions
+        active=$(pyenv version-name 2>/dev/null)
+        versions=$(pyenv versions --bare 2>/dev/null)
+        local entries=() v active_b
+        while IFS= read -r v; do
+            [[ -z "$v" ]] && continue
+            active_b=false
+            [[ "$v" == "$active" ]] && active_b=true
+            entries+=("$(jq -nc \
+                --arg version "$v" \
+                --argjson active "$active_b" \
+                '{version:$version,active:$active}')")
+        done <<< "$versions"
+        if (( ${#entries[@]} == 0 )); then echo "[]"; else printf '%s\n' "${entries[@]}" | jq -s .; fi
+        return 0
+    fi
+
     log_info "Installed Python versions (via pyenv):"
     pyenv versions
-    
+
     echo ""
     log_info "To see all available versions online:"
     echo "  pyenv install --list"
@@ -238,6 +262,17 @@ current_python() {
     if [[ -z "$current" || "$current" == "system" ]]; then
         log_warn "No active Python version managed by pyenv (pyenv version-name: ${current:-empty})" >&2
         return 1
+    fi
+
+    if [[ -n "$DTM_OUTPUT_JSON" ]]; then
+        local path
+        path=$(pyenv which python 2>/dev/null)
+        jq -nc \
+            --arg tool "python" \
+            --arg version "$current" \
+            --arg path "$path" \
+            '{tool:$tool,version:$version,path: (if $path == "" then null else $path end)}'
+        return 0
     fi
 
     echo "$current"
@@ -296,12 +331,9 @@ remove_python() {
     fi
     
     log_warn "About to uninstall Python $version using pyenv"
-    read -p "Are you sure? (y/N): " -n 1 -r
-    echo
-    
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
+    if dtm_confirm "Are you sure? (y/N): "; then
         pyenv uninstall -f "$version"
-        
+
         if [[ $? -eq 0 ]]; then
             log_success "Python $version removed"
         else

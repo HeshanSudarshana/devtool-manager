@@ -26,10 +26,16 @@ ensure_nvm() {
         echo "" >&2
         log_info "nvm is required for Node.js management" >&2
         echo "" >&2
-        read -p "Would you like to install nvm now? (y/N): " -n 1 -r >&2
-        echo "" >&2
-        
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
+        local _install_nvm=0
+        if [[ -n "$DTM_ASSUME_YES" ]]; then
+            _install_nvm=1
+        elif [[ -t 0 ]]; then
+            read -p "Would you like to install nvm now? (y/N): " -n 1 -r >&2
+            echo "" >&2
+            [[ $REPLY =~ ^[Yy]$ ]] && _install_nvm=1
+        fi
+
+        if (( _install_nvm == 1 )); then
             log_info "Installing nvm from master branch..." >&2
             
             # Download and install nvm
@@ -149,10 +155,32 @@ list_node() {
     if ! ensure_nvm; then
         exit 1
     fi
-    
+
+    if [[ -n "$DTM_OUTPUT_JSON" ]]; then
+        local active versions
+        active=$(nvm current 2>/dev/null | sed 's/^v//')
+        versions=$(nvm ls --no-colors --no-alias 2>/dev/null \
+            | sed -E 's/^[[:space:]>*]*//; s/[[:space:]].*$//' \
+            | grep -E '^v[0-9]+' \
+            | sed 's/^v//' \
+            | sort -V -u)
+        local entries=() v active_b
+        while IFS= read -r v; do
+            [[ -z "$v" ]] && continue
+            active_b=false
+            [[ "$v" == "$active" ]] && active_b=true
+            entries+=("$(jq -nc \
+                --arg version "$v" \
+                --argjson active "$active_b" \
+                '{version:$version,active:$active}')")
+        done <<< "$versions"
+        if (( ${#entries[@]} == 0 )); then echo "[]"; else printf '%s\n' "${entries[@]}" | jq -s .; fi
+        return 0
+    fi
+
     log_info "Installed Node.js versions (via nvm):"
     nvm ls
-    
+
     echo ""
     log_info "To see all available versions online:"
     echo "  nvm ls-remote"
@@ -172,8 +200,19 @@ current_node() {
         return 1
     fi
 
+    local version="${current#v}"
+    if [[ -n "$DTM_OUTPUT_JSON" ]]; then
+        local path
+        path=$(nvm which "$version" 2>/dev/null)
+        jq -nc \
+            --arg tool "node" \
+            --arg version "$version" \
+            --arg path "$path" \
+            '{tool:$tool,version:$version,path: (if $path == "" then null else $path end)}'
+        return 0
+    fi
     # Strip leading "v" so output matches `dtm pull node <version>` input
-    echo "${current#v}"
+    echo "$version"
 }
 
 # Update active Node.js to latest in current major series via nvm.
@@ -205,12 +244,9 @@ remove_node() {
     fi
     
     log_warn "About to uninstall Node.js $version using nvm"
-    read -p "Are you sure? (y/N): " -n 1 -r
-    echo
-    
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
+    if dtm_confirm "Are you sure? (y/N): "; then
         nvm uninstall "$version"
-        
+
         if [[ $? -eq 0 ]]; then
             log_success "Node.js $version removed"
         else

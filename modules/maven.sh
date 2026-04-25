@@ -60,9 +60,7 @@ pull_maven() {
 
     if [[ -d "$install_dir" ]]; then
         log_warn "Maven $exact_version is already installed at $install_dir"
-        read -p "Do you want to reinstall? (y/N): " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        if ! dtm_confirm "Do you want to reinstall? (y/N): "; then
             log_info "Installation cancelled"
             dtm_release_lock "$lock_path"
             trap - EXIT INT TERM
@@ -125,10 +123,12 @@ set_maven() {
     local version="$1"
     local mode="${2:-set}"
 
-    # Find matching installation
+    # Find matching installation. Skip the `current` symlink when a version
+    # literally equal to "current" is requested? In practice, Maven versions
+    # are dotted, so the symlink can't collide.
     local install_dir=""
 
-    if [[ -d "${MAVEN_ROOT}/${version}" ]]; then
+    if [[ -d "${MAVEN_ROOT}/${version}" && ! -L "${MAVEN_ROOT}/${version}" ]]; then
         install_dir="${MAVEN_ROOT}/${version}"
     else
         local matching_dirs
@@ -150,10 +150,12 @@ set_maven() {
         mkdir -p "$(dirname "$DTM_CONFIG")"
         dtm_clean_dtmrc_for "MAVEN_HOME" "/maven/.*/bin"
         dtm_clean_dtmrc_for "M2_HOME"
+        dtm_set_current_symlink "$MAVEN_ROOT" "$install_dir"
 
+        local stable_path="${MAVEN_ROOT}/current"
         cat >> "$DTM_CONFIG" << EOF
-export MAVEN_HOME="${install_dir}"
-export M2_HOME="${install_dir}"
+export MAVEN_HOME="${stable_path}"
+export M2_HOME="${stable_path}"
 export PATH="\${MAVEN_HOME}/bin:\${PATH}"
 EOF
 
@@ -167,8 +169,14 @@ EOF
         fi
 
         log_info "Applying changes to current shell..." >&2
+
+        echo "export MAVEN_HOME=\"${stable_path}\""
+        echo "export M2_HOME=\"${stable_path}\""
+        echo "export PATH=\"\${MAVEN_HOME}/bin:\${PATH}\""
+        return 0
     fi
 
+    # `use` mode: per-shell only — direct path, leave the symlink alone.
     echo "export MAVEN_HOME=\"${install_dir}\""
     echo "export M2_HOME=\"${install_dir}\""
     echo "export PATH=\"\${MAVEN_HOME}/bin:\${PATH}\""
@@ -177,18 +185,40 @@ EOF
 # List installed Maven versions
 list_maven() {
     if [[ ! -d "$MAVEN_ROOT" ]]; then
-        log_info "No Maven versions installed"
+        if [[ -n "$DTM_OUTPUT_JSON" ]]; then echo "[]"; else log_info "No Maven versions installed"; fi
         return 0
     fi
-    
-    log_info "Installed Maven versions:"
-    
+
     local current_maven_home="${MAVEN_HOME:-}"
-    
+    local active_resolved=""
+    [[ -n "$current_maven_home" && -e "$current_maven_home" ]] && \
+        active_resolved="$(dtm_resolved_path "$current_maven_home")"
+
+    if [[ -n "$DTM_OUTPUT_JSON" ]]; then
+        local entries=()
+        local dir version active
+        for dir in "$MAVEN_ROOT"/*; do
+            [[ -L "$dir" ]] && continue
+            [[ -d "$dir" && -f "$dir/bin/mvn" ]] || continue
+            version=$(basename "$dir")
+            active=false
+            [[ "$dir" == "$active_resolved" ]] && active=true
+            entries+=("$(jq -nc \
+                --arg version "$version" \
+                --arg path "$dir" \
+                --argjson active "$active" \
+                '{version:$version,path:$path,active:$active}')")
+        done
+        if (( ${#entries[@]} == 0 )); then echo "[]"; else printf '%s\n' "${entries[@]}" | jq -s .; fi
+        return 0
+    fi
+
+    log_info "Installed Maven versions:"
     for dir in "$MAVEN_ROOT"/*; do
+        [[ -L "$dir" ]] && continue
         if [[ -d "$dir" && -f "$dir/bin/mvn" ]]; then
             local version=$(basename "$dir")
-            if [[ "$dir" == "$current_maven_home" ]]; then
+            if [[ "$dir" == "$active_resolved" ]]; then
                 echo -e "  ${GREEN}* $version${NC} (active)"
             else
                 echo "    $version"
@@ -229,14 +259,14 @@ available_maven() {
         local matched
         matched=$(echo "$versions" | grep -E "^${filter//./\\.}(\$|\\.)" || true)
         if [[ -z "$matched" ]]; then
-            log_warn "No Maven versions matching '$filter'"
+            if [[ -n "$DTM_OUTPUT_JSON" ]]; then echo "[]"; else log_warn "No Maven versions matching '$filter'"; fi
             return 1
         fi
         log_info "Available Maven versions matching '$filter':"
-        echo "$matched" | sed 's/^/    /'
+        echo "$matched" | dtm_emit_version_list
     else
         log_info "Available Maven versions (most recent 20; pass a prefix to filter):"
-        echo "$versions" | tail -20 | sed 's/^/    /'
+        echo "$versions" | tail -20 | dtm_emit_version_list
     fi
 }
 
@@ -255,7 +285,19 @@ current_maven() {
         log_warn "Active Maven install is missing: $current_maven_home" >&2
         return 1
     fi
-    basename "$current_maven_home"
+    local resolved version
+    resolved="$(dtm_resolved_path "$current_maven_home")"
+    version="$(basename "$resolved")"
+    if [[ -n "$DTM_OUTPUT_JSON" ]]; then
+        jq -nc \
+            --arg tool "maven" \
+            --arg version "$version" \
+            --arg path "$resolved" \
+            --arg link "$current_maven_home" \
+            '{tool:$tool,version:$version,path:$path,link:$link}'
+        return 0
+    fi
+    echo "$version"
 }
 
 # Get latest Maven version matching a prefix (e.g. "3.9" -> latest 3.9.x).
@@ -285,7 +327,9 @@ get_latest_maven_for_prefix() {
 # Update active Maven to latest patch in current major.minor series.
 update_maven() {
     local current major_minor latest install_dir
-    current=$(current_maven) || {
+    # current_maven would emit JSON in --json mode; we want the raw version
+    # name here for parsing. Run it without JSON.
+    current=$(DTM_OUTPUT_JSON= current_maven) || {
         log_error "No active Maven version to update"
         exit 1
     }
@@ -325,10 +369,14 @@ remove_maven() {
     fi
     
     log_warn "About to remove Maven $version from $install_dir"
-    read -p "Are you sure? (y/N): " -n 1 -r
-    echo
-    
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
+    if dtm_confirm "Are you sure? (y/N): "; then
+        if [[ -L "${MAVEN_ROOT}/current" ]]; then
+            local cur_target
+            cur_target="$(dtm_resolved_path "${MAVEN_ROOT}/current" 2>/dev/null || true)"
+            if [[ "$cur_target" == "$install_dir" ]]; then
+                rm -f "${MAVEN_ROOT}/current"
+            fi
+        fi
         rm -rf "$install_dir"
         log_success "Maven $version removed"
     else

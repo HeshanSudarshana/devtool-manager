@@ -26,6 +26,8 @@ function __dtm_installed_versions
     test -d $root; or return 0
     for d in $root/*/
         test -d $d; or continue
+        # Skip the active-version symlink (`current/`).
+        test -L (string trim -r -c '/' -- $d); and continue
         echo (basename $d)
     end
 end
