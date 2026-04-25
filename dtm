@@ -8,7 +8,9 @@
 #   dtm list <tool>              - List installed versions
 #   dtm current <tool>           - Print the active version of a tool
 #   dtm available <tool> [filter]- Query remote for installable versions
+#   dtm update <tool>            - Bump active install to latest patch in series
 #   dtm remove <tool> <version>  - Remove an installed version
+#   dtm doctor                   - Diagnose dtm environment (deps, PATH, installs)
 #   dtm config home [path]       - Get or set the DTM_HOME directory
 
 set -e
@@ -233,7 +235,9 @@ Usage:
   dtm list <tool>                 List installed versions
   dtm current <tool>              Print the active version of a tool
   dtm available <tool> [filter]   Query remote for installable versions
+  dtm update <tool>               Bump active install to latest patch in current series
   dtm remove <tool> <version>     Remove an installed version
+  dtm doctor                      Diagnose dtm environment (deps, PATH, broken installs)
   dtm config home [path]          Get or set the DTM_HOME directory
 
 Supported tools:
@@ -254,6 +258,8 @@ Examples:
   dtm available java            List Java major releases on Temurin
   dtm available java 21         List all Java 21 GA patch versions
   dtm available go 1.22         List Go versions matching 1.22.x
+  dtm update java               Bump active Java to latest patch in major series
+  dtm doctor                    Diagnose dtm install (deps, PATH, broken installs)
   dtm config home               Show current DTM_HOME path
   dtm config home /custom/path  Set DTM_HOME to /custom/path
 EOF
@@ -309,6 +315,151 @@ source_modules() {
     if [[ -f "${script_dir}/modules/python.sh" ]]; then
         source "${script_dir}/modules/python.sh"
     fi
+}
+
+# Doctor command — diagnose dtm environment health.
+doctor_command() {
+    set +e
+    local issues=0 warnings=0
+
+    log_info "Running dtm doctor..."
+
+    log_info "[deps] checking required dependencies..."
+    local missing=()
+    local cmd
+    for cmd in curl jq tar unzip; do
+        command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
+    done
+    if (( ${#missing[@]} > 0 )); then
+        log_error "  missing: ${missing[*]}"
+        issues=$((issues+1))
+    else
+        log_success "  curl, jq, tar, unzip all present"
+    fi
+
+    log_info "[home] DTM_HOME=$DTM_ROOT"
+    if [[ ! -d "$DTM_ROOT" ]]; then
+        log_error "  DTM_ROOT missing"
+        issues=$((issues+1))
+    elif [[ ! -w "$DTM_ROOT" ]]; then
+        log_error "  DTM_ROOT not writable"
+        issues=$((issues+1))
+    else
+        log_success "  exists and writable"
+    fi
+
+    log_info "[dtmrc] $DTM_CONFIG"
+    if [[ -f "$DTM_CONFIG" ]]; then
+        if bash -n "$DTM_CONFIG" 2>/dev/null; then
+            log_success "  syntax OK"
+        else
+            log_error "  syntax errors"
+            issues=$((issues+1))
+        fi
+    else
+        log_info "  not present (no global pins)"
+    fi
+
+    log_warn "[wrapper] cannot verify dtm.sh is sourced from inside dtm; ensure your shell rc sources dtm.sh"
+    warnings=$((warnings+1))
+
+    local tool var_name tool_root bin_rel val
+    for tool in java maven gradle go; do
+        case "$tool" in
+            java)   var_name=JAVA_HOME;   tool_root="${DTM_ROOT}/java";   bin_rel=bin/java ;;
+            maven)  var_name=MAVEN_HOME;  tool_root="${DTM_ROOT}/maven";  bin_rel=bin/mvn ;;
+            gradle) var_name=GRADLE_HOME; tool_root="${DTM_ROOT}/gradle"; bin_rel=bin/gradle ;;
+            go)     var_name=GOROOT;      tool_root="${DTM_ROOT}/go";     bin_rel=bin/go ;;
+        esac
+        log_info "[$tool]"
+        if [[ ! -d "$tool_root" ]]; then
+            log_info "  no installs"
+            continue
+        fi
+
+        local valid=0 broken=0 d
+        for d in "$tool_root"/*; do
+            [[ -d "$d" ]] || continue
+            if [[ -x "$d/$bin_rel" ]]; then
+                valid=$((valid+1))
+            else
+                log_warn "  broken install: $d"
+                warnings=$((warnings+1))
+                broken=$((broken+1))
+            fi
+        done
+        log_info "  installs: $valid valid, $broken broken"
+
+        val="${!var_name:-}"
+        if [[ -z "$val" ]]; then
+            log_info "  $var_name not set"
+            continue
+        fi
+        if [[ "$val" != "$tool_root"/* ]]; then
+            log_warn "  $var_name=$val (outside $tool_root, not managed by dtm)"
+            warnings=$((warnings+1))
+            continue
+        fi
+        if [[ ! -d "$val" ]]; then
+            log_error "  $var_name -> missing dir $val"
+            issues=$((issues+1))
+            continue
+        fi
+        if [[ ! -x "$val/$bin_rel" ]]; then
+            log_error "  $var_name -> $val missing $bin_rel"
+            issues=$((issues+1))
+            continue
+        fi
+        log_success "  active: $(basename "$val")"
+        case ":$PATH:" in
+            *":$val/bin:"*)
+                log_success "  $val/bin in PATH"
+                ;;
+            *)
+                log_error "  $val/bin not in PATH"
+                issues=$((issues+1))
+                ;;
+        esac
+    done
+
+    log_info "[symlinks] scanning $DTM_ROOT for broken symlinks..."
+    local broken_links link
+    broken_links=$(find "$DTM_ROOT" -xtype l 2>/dev/null)
+    if [[ -n "$broken_links" ]]; then
+        while IFS= read -r link; do
+            log_warn "  broken symlink: $link"
+            warnings=$((warnings+1))
+        done <<< "$broken_links"
+    else
+        log_success "  none"
+    fi
+
+    log_info "[orphans] checking top-level entries under $DTM_ROOT..."
+    local known_re='^(java|maven|gradle|go|node|python|go-workspaces)$'
+    local orphans=() entry name
+    for entry in "$DTM_ROOT"/*; do
+        [[ -e "$entry" ]] || continue
+        name=$(basename "$entry")
+        if ! [[ "$name" =~ $known_re ]]; then
+            orphans+=("$entry")
+        fi
+    done
+    if (( ${#orphans[@]} > 0 )); then
+        local o
+        for o in "${orphans[@]}"; do
+            log_warn "  unknown: $o"
+            warnings=$((warnings+1))
+        done
+    else
+        log_success "  none"
+    fi
+
+    echo ""
+    if (( issues > 0 )); then
+        log_error "doctor: $issues error(s), $warnings warning(s)"
+        exit 1
+    fi
+    log_success "doctor: 0 errors, $warnings warning(s)"
 }
 
 # Config command handler
@@ -378,6 +529,14 @@ main() {
             exit 1
         fi
         config_command "$2" "$3"
+        exit 0
+    fi
+
+    # Handle doctor command separately (no tool/version args)
+    if [[ "$command" == "doctor" ]]; then
+        detect_platform
+        source_modules
+        doctor_command
         exit 0
     fi
 
@@ -494,6 +653,18 @@ main() {
                 go) remove_go "$version" ;;
                 node) remove_node "$version" ;;
                 python) remove_python "$version" ;;
+                *) log_error "Unknown tool: $tool"; exit 1 ;;
+            esac
+            ;;
+        update)
+            dtm_check_deps
+            case "$tool" in
+                java) update_java ;;
+                maven) update_maven ;;
+                gradle) update_gradle ;;
+                go) update_go ;;
+                node) update_node ;;
+                python) update_python ;;
                 *) log_error "Unknown tool: $tool"; exit 1 ;;
             esac
             ;;

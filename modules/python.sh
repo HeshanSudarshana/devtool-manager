@@ -243,6 +243,50 @@ current_python() {
     echo "$current"
 }
 
+# Update active Python to latest patch in current major.minor series via pyenv.
+update_python() {
+    if ! ensure_pyenv; then
+        exit 1
+    fi
+
+    local current major_minor latest
+    current=$(pyenv version-name 2>/dev/null)
+    if [[ -z "$current" || "$current" == "system" ]]; then
+        log_error "No active Python version (pyenv version-name: ${current:-empty})"
+        exit 1
+    fi
+    major_minor=$(echo "$current" | grep -oE '^[0-9]+\.[0-9]+')
+    if [[ -z "$major_minor" ]]; then
+        log_error "Cannot parse major.minor from '$current'"
+        exit 1
+    fi
+    log_info "Active Python: $current (series $major_minor)" >&2
+
+    log_info "Querying pyenv for latest ${major_minor}.x..." >&2
+    latest=$(pyenv install --list 2>/dev/null \
+        | sed 's/^[[:space:]]*//' \
+        | grep -E "^${major_minor//./\\.}\\.[0-9]+\$" \
+        | sort -V \
+        | tail -1)
+    if [[ -z "$latest" ]]; then
+        log_error "Could not find latest Python ${major_minor}.x"
+        exit 1
+    fi
+    log_info "Latest Python $major_minor: $latest" >&2
+
+    if [[ "$latest" == "$current" ]]; then
+        log_success "Python $current is already the latest patch" >&2
+        return 0
+    fi
+
+    if ! pyenv versions --bare 2>/dev/null | grep -qx "$latest"; then
+        log_info "Compiling Python $latest via pyenv (slow)..." >&2
+        pyenv install "$latest" || exit 1
+    fi
+
+    set_python "$latest" set
+}
+
 # Remove Python version using pyenv
 remove_python() {
     local version="$1"

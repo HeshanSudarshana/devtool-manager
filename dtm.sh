@@ -12,14 +12,14 @@ DTM_BIN="${DTM_BIN:-${HOME}/.local/bin/dtm}"
 dtm() {
     local subcmd="$1"
 
-    if [[ "$subcmd" == "set" || "$subcmd" == "use" ]]; then
+    if [[ "$subcmd" == "set" || "$subcmd" == "use" || "$subcmd" == "update" ]]; then
         local exports
         exports=$("$DTM_BIN" "$@")
         local exit_code=$?
 
         if [[ $exit_code -eq 0 ]]; then
             eval "$exports"
-            if [[ "$subcmd" == "set" ]]; then
+            if [[ "$subcmd" == "set" || "$subcmd" == "update" ]]; then
                 echo "✓ Changes applied to current shell"
             fi
         fi

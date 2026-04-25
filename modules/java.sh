@@ -297,6 +297,34 @@ current_java() {
     basename "$current_java_home"
 }
 
+# Update active Java to latest patch in current major series.
+update_java() {
+    local current_version major latest install_dir
+    current_version=$(current_java) || {
+        log_error "No active Java version to update"
+        exit 1
+    }
+    major="${current_version%%.*}"
+    log_info "Active Java: $current_version (major $major)" >&2
+
+    latest=$(get_latest_java_version "$major") || exit 1
+    log_info "Latest Java $major from Temurin: $latest" >&2
+
+    if [[ "$latest" == "$current_version" ]]; then
+        log_success "Java $current_version is already the latest patch" >&2
+        return 0
+    fi
+
+    install_dir="${JAVA_ROOT}/${latest}"
+    if [[ ! -d "$install_dir" ]]; then
+        pull_java "$latest"
+    else
+        log_info "Java $latest already installed; switching only" >&2
+    fi
+
+    set_java "$latest" set
+}
+
 # Remove Java version
 remove_java() {
     local version="$1"

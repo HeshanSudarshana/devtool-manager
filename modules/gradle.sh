@@ -275,6 +275,38 @@ current_gradle() {
     basename "$current_gradle_home"
 }
 
+# Update active Gradle to latest patch in current major.minor series.
+update_gradle() {
+    local current major_minor latest install_dir
+    current=$(current_gradle) || {
+        log_error "No active Gradle version to update"
+        exit 1
+    }
+    major_minor=$(echo "$current" | grep -oE '^[0-9]+\.[0-9]+')
+    if [[ -z "$major_minor" ]]; then
+        log_error "Cannot parse major.minor from '$current'"
+        exit 1
+    fi
+    log_info "Active Gradle: $current (series $major_minor)" >&2
+
+    latest=$(get_latest_gradle_version "$major_minor") || exit 1
+    log_info "Latest Gradle $major_minor: $latest" >&2
+
+    if [[ "$latest" == "$current" ]]; then
+        log_success "Gradle $current is already the latest patch" >&2
+        return 0
+    fi
+
+    install_dir="${GRADLE_ROOT}/${latest}"
+    if [[ ! -d "$install_dir" ]]; then
+        pull_gradle "$latest"
+    else
+        log_info "Gradle $latest already installed; switching only" >&2
+    fi
+
+    set_gradle "$latest" set
+}
+
 # Remove Gradle version
 remove_gradle() {
     local version="$1"

@@ -176,6 +176,26 @@ current_node() {
     echo "${current#v}"
 }
 
+# Update active Node.js to latest in current major series via nvm.
+update_node() {
+    if ! ensure_nvm; then
+        exit 1
+    fi
+
+    local current major
+    current=$(nvm current 2>/dev/null | sed 's/^v//')
+    if [[ -z "$current" || "$current" == "system" || "$current" == "none" ]]; then
+        log_error "No active Node.js version (nvm current: ${current:-empty})"
+        exit 1
+    fi
+    major="${current%%.*}"
+    log_info "Active Node.js: $current (major $major)" >&2
+    log_info "Installing latest Node.js $major via nvm..." >&2
+    nvm install "$major" || exit 1
+
+    set_node "$major" set
+}
+
 # Remove Node.js version using nvm
 remove_node() {
     local version="$1"

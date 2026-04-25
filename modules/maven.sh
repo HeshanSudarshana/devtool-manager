@@ -258,6 +258,62 @@ current_maven() {
     basename "$current_maven_home"
 }
 
+# Get latest Maven version matching a prefix (e.g. "3.9" -> latest 3.9.x).
+get_latest_maven_for_prefix() {
+    local prefix="$1"
+    local response
+    response=$(curl -fsSL --retry 3 --retry-delay 2 \
+        "https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/maven-metadata.xml" 2>/dev/null) || {
+        log_error "Failed to query Maven metadata" >&2
+        return 1
+    }
+    local latest
+    latest=$(echo "$response" \
+        | grep -o '<version>[^<]*</version>' \
+        | sed 's/<[^>]*>//g' \
+        | grep -v -- '-' \
+        | grep -E "^${prefix//./\\.}\\." \
+        | sort -V \
+        | tail -1)
+    if [[ -z "$latest" ]]; then
+        log_error "No Maven version found for prefix '$prefix'" >&2
+        return 1
+    fi
+    echo "$latest"
+}
+
+# Update active Maven to latest patch in current major.minor series.
+update_maven() {
+    local current major_minor latest install_dir
+    current=$(current_maven) || {
+        log_error "No active Maven version to update"
+        exit 1
+    }
+    major_minor=$(echo "$current" | grep -oE '^[0-9]+\.[0-9]+')
+    if [[ -z "$major_minor" ]]; then
+        log_error "Cannot parse major.minor from '$current'"
+        exit 1
+    fi
+    log_info "Active Maven: $current (series $major_minor)" >&2
+
+    latest=$(get_latest_maven_for_prefix "$major_minor") || exit 1
+    log_info "Latest Maven $major_minor: $latest" >&2
+
+    if [[ "$latest" == "$current" ]]; then
+        log_success "Maven $current is already the latest patch" >&2
+        return 0
+    fi
+
+    install_dir="${MAVEN_ROOT}/${latest}"
+    if [[ ! -d "$install_dir" ]]; then
+        pull_maven "$latest"
+    else
+        log_info "Maven $latest already installed; switching only" >&2
+    fi
+
+    set_maven "$latest" set
+}
+
 # Remove Maven version
 remove_maven() {
     local version="$1"

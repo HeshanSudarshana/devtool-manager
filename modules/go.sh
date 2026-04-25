@@ -308,6 +308,38 @@ current_go() {
     basename "$current_goroot"
 }
 
+# Update active Go to latest patch in current major.minor series.
+update_go() {
+    local current major_minor latest install_dir
+    current=$(current_go) || {
+        log_error "No active Go version to update"
+        exit 1
+    }
+    major_minor=$(echo "$current" | grep -oE '^[0-9]+\.[0-9]+')
+    if [[ -z "$major_minor" ]]; then
+        log_error "Cannot parse major.minor from '$current'"
+        exit 1
+    fi
+    log_info "Active Go: $current (series $major_minor)" >&2
+
+    latest=$(get_latest_go_version "$major_minor") || exit 1
+    log_info "Latest Go $major_minor: $latest" >&2
+
+    if [[ "$latest" == "$current" ]]; then
+        log_success "Go $current is already the latest patch" >&2
+        return 0
+    fi
+
+    install_dir="${GO_ROOT}/${latest}"
+    if [[ ! -d "$install_dir" ]]; then
+        pull_go "$latest"
+    else
+        log_info "Go $latest already installed; switching only" >&2
+    fi
+
+    set_go "$latest" set
+}
+
 # Remove Go version
 remove_go() {
     local version="$1"
