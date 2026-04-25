@@ -11,17 +11,26 @@
 #   home_var                Env var to export for the active install (e.g. KOTLIN_HOME).
 #   extra_vars              Space-separated extra env vars to also point at the home dir.
 #   bin_subdir              Subdir under home that goes on PATH (default: bin).
+#   binary_name             Executable filename (default: basename of binary_check).
 #   binary_check            Path under install dir that proves a valid install (e.g. bin/kotlinc).
-#   archive_format          One of: tar.gz, tgz, tar.xz, zip.
-#   archive_strip_top       1 = archive has a single top-level dir whose contents become install_dir.
-#                           0 = extract directly into install_dir.
-#   download_url            Template; ${VERSION} is substituted with the resolved version.
-#   checksum_url            Optional sidecar URL template (omitted = skip checksum, with warning).
+#   archive_format          tar.gz | tgz | tar.xz | zip | binary.
+#                           `binary` = no archive, payload is the raw executable.
+#   archive_layout          nested      = single top-level dir, its contents become install_dir.
+#                           flat        = extract contents directly into install_dir.
+#                           flat_to_bin = single binary at archive root, install as bin_subdir/binary_name.
+#                           binary      = (set automatically when archive_format=binary).
+#                           Backwards-compat: archive_strip_top=1 maps to nested, =0 maps to flat.
+#   download_url            Template. Substitutions: ${VERSION}, ${OS}, ${ARCH}.
+#   checksum_url            Optional sidecar URL template (omitted = skip with warning).
 #   checksum_algo           sha256 (default), sha512, sha1.
-#   version_strategy        Named version-list strategy: github_releases (more to come).
-#   version_strategy_arg    Strategy-specific argument (e.g. "owner/repo" for github_releases).
-#   version_filter          Regex applied to listed versions (anchor with ^/$).
-#   version_tag_prefix      Prefix stripped from upstream tag names before comparison (e.g. v).
+#   checksum_format         single (file body is the hash, default) | multi (lines `<hash>  <filename>`,
+#                           grep by basename of download_url).
+#   os_linux, os_mac        Per-candidate alias for ${OS}. Defaults to dtm's OS (linux|mac).
+#   arch_x64, arch_aarch64  Per-candidate alias for ${ARCH}. Defaults to dtm's ARCH (x64|aarch64).
+#   version_strategy        Named strategy: github_releases | hashicorp_releases.
+#   version_strategy_arg    Strategy-specific arg (e.g. "owner/repo", "terraform").
+#   version_filter          Regex applied to listed versions.
+#   version_tag_prefix      Prefix stripped from upstream tag names (e.g. v).
 #   post_install_fn         Optional shell function called as: <fn> <install_dir> <version>.
 
 # Registry of discovered descriptor files: name -> absolute path.
@@ -34,12 +43,19 @@ candidate_reset() {
     candidate_home_var=""
     candidate_extra_vars=""
     candidate_bin_subdir="bin"
+    candidate_binary_name=""
     candidate_binary_check=""
     candidate_archive_format=""
-    candidate_archive_strip_top="0"
+    candidate_archive_layout=""
+    candidate_archive_strip_top=""
     candidate_download_url=""
     candidate_checksum_url=""
     candidate_checksum_algo="sha256"
+    candidate_checksum_format="single"
+    candidate_os_linux="linux"
+    candidate_os_mac="mac"
+    candidate_arch_x64="x64"
+    candidate_arch_aarch64="aarch64"
     candidate_version_strategy=""
     candidate_version_strategy_arg=""
     candidate_version_filter=""
@@ -59,16 +75,39 @@ candidate_load() {
     # shellcheck source=/dev/null
     source "$file"
     candidate_name="${candidate_name:-$name}"
+
+    # archive_layout defaults: derive from archive_format / strip_top.
+    if [[ -z "$candidate_archive_layout" ]]; then
+        if [[ "$candidate_archive_format" == "binary" ]]; then
+            candidate_archive_layout="binary"
+        elif [[ "$candidate_archive_strip_top" == "1" ]]; then
+            candidate_archive_layout="nested"
+        else
+            candidate_archive_layout="flat"
+        fi
+    fi
+
+    # binary_name default: basename of binary_check.
+    if [[ -z "$candidate_binary_name" && -n "$candidate_binary_check" ]]; then
+        candidate_binary_name="$(basename "$candidate_binary_check")"
+    fi
 }
 
 candidate_root() {
     echo "${DTM_ROOT}/${candidate_name}"
 }
 
-# Substitute ${VERSION} (and only that) in a URL template.
+# Substitute ${VERSION}, ${OS}, ${ARCH} in a URL template. OS/ARCH are mapped
+# through per-candidate aliases (candidate_os_<dtm_os>, candidate_arch_<dtm_arch>).
+# OS and ARCH globals are populated by detect_platform() in dtm.
 candidate_render_url() {
     local template="$1" version="$2"
-    echo "${template//\$\{VERSION\}/$version}"
+    local os_key="candidate_os_${OS}" arch_key="candidate_arch_${ARCH}"
+    local os_val="${!os_key:-$OS}" arch_val="${!arch_key:-$ARCH}"
+    local out="${template//\$\{VERSION\}/$version}"
+    out="${out//\$\{OS\}/$os_val}"
+    out="${out//\$\{ARCH\}/$arch_val}"
+    echo "$out"
 }
 
 # Emit `export` lines for the active install. Goes to stdout so the dtm.sh
@@ -99,21 +138,41 @@ strategy_github_releases_list() {
         "https://api.github.com/repos/${repo}/releases?per_page=100" 2>/dev/null) || return 1
     local tags
     tags=$(echo "$response" | jq -r '.[] | select(.draft==false and .prerelease==false) | .tag_name' 2>/dev/null) || return 1
+    candidate_filter_versions "$tags"
+}
+
+# HashiCorp releases API: https://api.releases.hashicorp.com/v1/releases/<product>?limit=20
+# The API caps `limit` at 20, so this returns the 20 most recent releases.
+# (Older versions would need pagination via `?after=<version>`.)
+strategy_hashicorp_releases_list() {
+    local product="$1"
+    local response
+    response=$(curl -fsSL --retry 3 --retry-delay 2 \
+        "https://api.releases.hashicorp.com/v1/releases/${product}?limit=20" 2>/dev/null) || return 1
+    local versions
+    versions=$(echo "$response" | jq -r '.[] | select(.is_prerelease==false) | .version' 2>/dev/null) || return 1
+    candidate_filter_versions "$versions"
+}
+
+# Apply candidate_version_tag_prefix + candidate_version_filter, then sort/dedup.
+candidate_filter_versions() {
+    local list="$1"
     local prefix="${candidate_version_tag_prefix:-}"
     if [[ -n "$prefix" ]]; then
-        tags=$(echo "$tags" | sed "s/^${prefix}//")
+        list=$(echo "$list" | sed "s/^${prefix}//")
     fi
     local filter="${candidate_version_filter:-}"
     if [[ -n "$filter" ]]; then
-        tags=$(echo "$tags" | grep -E "$filter" || true)
+        list=$(echo "$list" | grep -E "$filter" || true)
     fi
-    echo "$tags" | sort -V -u | grep -v '^$' || true
+    echo "$list" | sort -V -u | grep -v '^$' || true
 }
 
 # Dispatch to the configured version strategy.
 candidate_list_versions() {
     case "$candidate_version_strategy" in
-        github_releases) strategy_github_releases_list "$candidate_version_strategy_arg" ;;
+        github_releases)    strategy_github_releases_list    "$candidate_version_strategy_arg" ;;
+        hashicorp_releases) strategy_hashicorp_releases_list "$candidate_version_strategy_arg" ;;
         *) log_error "Unknown version strategy: $candidate_version_strategy" >&2; return 1 ;;
     esac
 }
@@ -163,19 +222,10 @@ candidate_pull() {
     url=$(candidate_render_url "$candidate_download_url" "$exact")
     log_info "Downloading ${name} from $url"
 
-    local temp_dir ext download_file
+    local temp_dir download_file url_basename
     temp_dir=$(mktemp -d)
-    case "$candidate_archive_format" in
-        tar.gz|tgz) ext="tar.gz" ;;
-        tar.xz)     ext="tar.xz" ;;
-        zip)        ext="zip" ;;
-        *)
-            log_error "Unsupported archive_format: $candidate_archive_format"
-            rm -rf "$temp_dir"
-            exit 1
-            ;;
-    esac
-    download_file="${temp_dir}/${name}.${ext}"
+    url_basename=$(basename "$url")
+    download_file="${temp_dir}/${url_basename}"
 
     if ! dtm_download "$url" "$download_file"; then
         log_error "Download failed"
@@ -187,7 +237,7 @@ candidate_pull() {
         local checksum_url checksum
         checksum_url=$(candidate_render_url "$candidate_checksum_url" "$exact")
         log_info "Fetching checksum from $checksum_url"
-        checksum=$(fetch_checksum_from_url "$checksum_url")
+        checksum=$(candidate_fetch_checksum "$checksum_url" "$url_basename")
         if [[ -z "$checksum" ]]; then
             log_error "Failed to fetch checksum from $checksum_url"
             rm -rf "$temp_dir"
@@ -202,10 +252,10 @@ candidate_pull() {
         log_warn "No checksum configured for ${name} — skipping verification"
     fi
 
-    log_info "Extracting ${name} to $install_dir..."
+    log_info "Installing ${name} to $install_dir..."
     mkdir -p "$install_dir"
     if ! candidate_extract "$download_file" "$install_dir" "$temp_dir"; then
-        log_error "Extraction failed"
+        log_error "Install payload step failed"
         rm -rf "$temp_dir" "$install_dir"
         exit 1
     fi
@@ -237,48 +287,93 @@ candidate_pull() {
     log_info "Run 'dtm set ${name} ${exact}' to activate"
 }
 
-# Extract <archive> into <install_dir>, honoring archive_format and
-# archive_strip_top. <temp_dir> is a scratch dir for staging zip extracts.
-candidate_extract() {
-    local archive="$1" install_dir="$2" temp_dir="$3"
-    case "$candidate_archive_format" in
-        tar.gz|tgz)
-            if [[ "$candidate_archive_strip_top" == "1" ]]; then
-                tar -xzf "$archive" -C "$install_dir" --strip-components=1
-            else
-                tar -xzf "$archive" -C "$install_dir"
-            fi
+# Fetch checksum from a sidecar URL. Honors candidate_checksum_format:
+#   single (default) — file body is the hash (first whitespace token).
+#   multi            — lines `<hash>  <filename>`; pick the line matching <basename>.
+candidate_fetch_checksum() {
+    local url="$1" basename="$2"
+    case "$candidate_checksum_format" in
+        single|"")
+            fetch_checksum_from_url "$url"
             ;;
-        tar.xz)
-            if [[ "$candidate_archive_strip_top" == "1" ]]; then
-                tar -xJf "$archive" -C "$install_dir" --strip-components=1
-            else
-                tar -xJf "$archive" -C "$install_dir"
-            fi
-            ;;
-        zip)
-            local stage="${temp_dir}/extracted"
-            mkdir -p "$stage"
-            unzip -q "$archive" -d "$stage" || return 1
-            if [[ "$candidate_archive_strip_top" == "1" ]]; then
-                local count top
-                count=$(find "$stage" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')
-                if [[ "$count" != "1" ]]; then
-                    log_error "Expected single top-level entry in zip, found $count"
-                    return 1
-                fi
-                top=$(find "$stage" -mindepth 1 -maxdepth 1 | head -1)
-                if [[ ! -d "$top" ]]; then
-                    log_error "Top-level entry in zip is not a directory: $top"
-                    return 1
-                fi
-                ( shopt -s dotglob nullglob; mv "$top"/* "$install_dir/" )
-            else
-                ( shopt -s dotglob nullglob; mv "$stage"/* "$install_dir/" )
-            fi
+        multi)
+            local content line
+            content=$(curl -sL --fail "$url" 2>/dev/null) || return 1
+            line=$(echo "$content" | awk -v name="$basename" '$2 == name {print $1; exit}')
+            echo "$line"
             ;;
         *)
+            log_error "Unknown checksum_format: $candidate_checksum_format" >&2
+            return 1
+            ;;
+    esac
+}
+
+# Place the downloaded payload into <install_dir>, honoring archive_format and
+# archive_layout. <temp_dir> is a scratch dir for staging zip extracts.
+candidate_extract() {
+    local archive="$1" install_dir="$2" temp_dir="$3"
+
+    # `binary` mode: payload is the raw executable, no extraction.
+    if [[ "$candidate_archive_format" == "binary" ]]; then
+        if [[ -z "$candidate_binary_name" ]]; then
+            log_error "binary_name required when archive_format=binary"
+            return 1
+        fi
+        local target="${install_dir}/${candidate_bin_subdir}/${candidate_binary_name}"
+        mkdir -p "$(dirname "$target")"
+        cp "$archive" "$target" || return 1
+        chmod +x "$target" || return 1
+        return 0
+    fi
+
+    # Stage all archive types into a temp dir, then move into place per layout.
+    local stage="${temp_dir}/extracted"
+    mkdir -p "$stage"
+    case "$candidate_archive_format" in
+        tar.gz|tgz) tar -xzf "$archive" -C "$stage" || return 1 ;;
+        tar.xz)     tar -xJf "$archive" -C "$stage" || return 1 ;;
+        zip)        unzip -q "$archive" -d "$stage" || return 1 ;;
+        *)
             log_error "Unsupported archive_format: $candidate_archive_format"
+            return 1
+            ;;
+    esac
+
+    case "$candidate_archive_layout" in
+        nested)
+            local count top
+            count=$(find "$stage" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')
+            if [[ "$count" != "1" ]]; then
+                log_error "Expected single top-level entry in archive, found $count"
+                return 1
+            fi
+            top=$(find "$stage" -mindepth 1 -maxdepth 1 | head -1)
+            if [[ ! -d "$top" ]]; then
+                log_error "Top-level entry in archive is not a directory: $top"
+                return 1
+            fi
+            ( shopt -s dotglob nullglob; mv "$top"/* "$install_dir/" )
+            ;;
+        flat)
+            ( shopt -s dotglob nullglob; mv "$stage"/* "$install_dir/" )
+            ;;
+        flat_to_bin)
+            if [[ -z "$candidate_binary_name" ]]; then
+                log_error "binary_name required when archive_layout=flat_to_bin"
+                return 1
+            fi
+            local src="${stage}/${candidate_binary_name}"
+            if [[ ! -f "$src" ]]; then
+                log_error "Expected binary at archive root: ${candidate_binary_name}"
+                return 1
+            fi
+            mkdir -p "${install_dir}/${candidate_bin_subdir}"
+            mv "$src" "${install_dir}/${candidate_bin_subdir}/${candidate_binary_name}"
+            chmod +x "${install_dir}/${candidate_bin_subdir}/${candidate_binary_name}"
+            ;;
+        *)
+            log_error "Unknown archive_layout: $candidate_archive_layout"
             return 1
             ;;
     esac
