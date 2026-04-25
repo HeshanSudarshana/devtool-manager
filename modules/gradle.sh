@@ -7,28 +7,27 @@ GRADLE_ROOT="${DTM_ROOT}/gradle"
 # Get the latest patch version for a major.minor version from Gradle API
 get_latest_gradle_version() {
     local major_minor="$1"
-    
+
     log_info "Fetching latest Gradle $major_minor version..." >&2
-    
-    # Fetch all versions from Gradle API and find latest matching version
-    local version=$(curl -s "https://services.gradle.org/versions/all" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-# Get all versions
-versions = [item['version'] for item in data]
-# Filter versions matching the pattern
-matching = [v for v in versions if v.startswith('${major_minor}.')]
-if matching:
-    # Sort by splitting version parts as integers
-    sorted_versions = sorted(matching, key=lambda x: [int(p) for p in x.split('.')])
-    print(sorted_versions[-1])
-" 2>/dev/null)
-    
+
+    local response
+    response=$(curl -fsSL --retry 3 --retry-delay 2 "https://services.gradle.org/versions/all" 2>/dev/null) || {
+        log_error "Failed to query Gradle versions API" >&2
+        return 1
+    }
+
+    local version
+    version=$(echo "$response" \
+        | jq -r '.[].version' 2>/dev/null \
+        | grep -E "^${major_minor}\." \
+        | sort -V \
+        | tail -1)
+
     if [[ -z "$version" ]]; then
         log_error "Could not find version matching $major_minor" >&2
         return 1
     fi
-    
+
     echo "$version"
 }
 
@@ -49,51 +48,49 @@ get_gradle_download_url() {
 pull_gradle() {
     local version="$1"
     local exact_version=""
-    
-    # Check if version is just major.minor (e.g., "8.5") or full version (e.g., "8.5.1")
+
     if [[ "$version" =~ ^[0-9]+\.[0-9]+$ ]]; then
         log_info "Version $version is a major.minor version, fetching latest patch version..."
-        exact_version=$(get_latest_gradle_version "$version")
-        if [[ $? -ne 0 ]]; then
+        exact_version=$(get_latest_gradle_version "$version") || {
             log_error "Failed to get latest version for Gradle $version"
             exit 1
-        fi
+        }
         log_info "Latest version found: $exact_version"
     else
         exact_version="$version"
     fi
-    
-    # Create Gradle directory if it doesn't exist
+
     mkdir -p "$GRADLE_ROOT"
-    
-    # Determine installation directory
+
     local install_dir="${GRADLE_ROOT}/${exact_version}"
-    
+    local lock_path="${install_dir}.lock"
+
+    dtm_acquire_lock "$lock_path" || exit 1
+    trap 'dtm_release_lock "'"$lock_path"'"' EXIT INT TERM
+
     if [[ -d "$install_dir" ]]; then
         log_warn "Gradle $exact_version is already installed at $install_dir"
         read -p "Do you want to reinstall? (y/N): " -n 1 -r
         echo
         if [[ ! $REPLY =~ ^[Yy]$ ]]; then
             log_info "Installation cancelled"
+            dtm_release_lock "$lock_path"
+            trap - EXIT INT TERM
             return 0
         fi
         rm -rf "$install_dir"
     fi
-    
-    # Get download URL
-    local download_url=$(get_gradle_download_url "$exact_version")
-    if [[ $? -ne 0 ]]; then
-        exit 1
-    fi
-    
+
+    local download_url
+    download_url=$(get_gradle_download_url "$exact_version") || exit 1
+
     log_info "Downloading Gradle from: $download_url"
-    
-    # Create temp directory for download
-    local temp_dir=$(mktemp -d)
+
+    local temp_dir
+    temp_dir=$(mktemp -d)
     local download_file="${temp_dir}/gradle.zip"
-    
-    # Download with progress
-    if ! curl -L --progress-bar -o "$download_file" "$download_url"; then
+
+    if ! dtm_download "$download_url" "$download_file"; then
         log_error "Download failed"
         rm -rf "$temp_dir"
         exit 1
@@ -115,23 +112,24 @@ pull_gradle() {
     fi
 
     log_info "Extracting Gradle to $install_dir..."
-    
-    # Extract zip file
     mkdir -p "$install_dir"
-    unzip -q "$download_file" -d "$temp_dir"
-    
-    if [[ $? -ne 0 ]]; then
+    if ! unzip -q "$download_file" -d "$temp_dir"; then
         log_error "Extraction failed"
         rm -rf "$temp_dir" "$install_dir"
         exit 1
     fi
-    
-    # Move contents (gradle creates a gradle-x.x.x directory in the zip)
-    mv "$temp_dir"/gradle-${exact_version}/* "$install_dir/"
-    
-    # Cleanup
+
+    if ! mv "$temp_dir"/gradle-${exact_version}/* "$install_dir/"; then
+        log_error "Failed to move extracted Gradle into $install_dir"
+        rm -rf "$temp_dir" "$install_dir"
+        exit 1
+    fi
+
     rm -rf "$temp_dir"
-    
+
+    dtm_release_lock "$lock_path"
+    trap - EXIT INT TERM
+
     log_success "Gradle $exact_version installed successfully to $install_dir"
     log_info "Run 'dtm set gradle $exact_version' to activate this version"
 }
@@ -143,20 +141,19 @@ set_gradle() {
     # Find matching installation
     local install_dir=""
     
-    # Check if exact version exists
     if [[ -d "${GRADLE_ROOT}/${version}" ]]; then
         install_dir="${GRADLE_ROOT}/${version}"
     else
-        # Try to find latest version matching the major.minor version
-        local major_minor=$(echo "$version" | grep -o '^[0-9]\+\.[0-9]\+')
+        local major_minor matching_dirs
+        major_minor=$(echo "$version" | grep -o '^[0-9]\+\.[0-9]\+')
         if [[ -n "$major_minor" ]]; then
-            local matching_dirs=$(find "$GRADLE_ROOT" -maxdepth 1 -type d -name "${major_minor}.*" 2>/dev/null | sort -V | tail -1)
-            
+            matching_dirs=$(find "$GRADLE_ROOT" -maxdepth 1 -type d -name "${major_minor}.*" 2>/dev/null | sort -V | tail -1)
+
             if [[ -n "$matching_dirs" ]]; then
                 install_dir="$matching_dirs"
             fi
         fi
-        
+
         if [[ -z "$install_dir" ]]; then
             log_error "Gradle $version is not installed"
             log_info "Available versions:"
@@ -164,17 +161,12 @@ set_gradle() {
             exit 1
         fi
     fi
-    
-    log_info "Setting Gradle to $(basename $install_dir)..." >&2
-    
-    # Update .dtmrc configuration file
-    mkdir -p "$(dirname $DTM_CONFIG)"
-    
-    # Remove old Gradle configuration
-    if [[ -f "$DTM_CONFIG" ]]; then
-        sed -i '/^export GRADLE_HOME=/d' "$DTM_CONFIG"
-        sed -i '/^export PATH=.*gradle.*bin/d' "$DTM_CONFIG"
-    fi
+
+    log_info "Setting Gradle to $(basename "$install_dir")..." >&2
+
+    mkdir -p "$(dirname "$DTM_CONFIG")"
+
+    dtm_clean_dtmrc_for "GRADLE_HOME" "/gradle/.*/bin"
     
     # Add new Gradle configuration
     cat >> "$DTM_CONFIG" << EOF
@@ -182,7 +174,7 @@ export GRADLE_HOME="${install_dir}"
 export PATH="\${GRADLE_HOME}/bin:\${PATH}"
 EOF
     
-    log_success "Gradle $(basename $install_dir) activated" >&2
+    log_success "Gradle $(basename "$install_dir") activated" >&2
     
     # Show current Gradle version
     if [[ -f "${install_dir}/bin/gradle" ]]; then

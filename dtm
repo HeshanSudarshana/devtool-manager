@@ -63,6 +63,107 @@ fetch_checksum_from_url() {
     echo "$content" | head -1 | awk '{print $1}'
 }
 
+# Portable in-place sed (BSD/macOS sed needs an empty arg after -i).
+dtm_sed_i() {
+    if sed --version >/dev/null 2>&1; then
+        sed -i "$@"
+    else
+        sed -i '' "$@"
+    fi
+}
+
+# Check that a URL is reachable. Treats any 2xx/3xx as success.
+# Usage: dtm_url_exists <url>
+dtm_url_exists() {
+    local url="$1"
+    local code
+    code=$(curl -sIL --max-time 15 -o /dev/null -w '%{http_code}' "$url" 2>/dev/null) || return 1
+    [[ "$code" =~ ^[23][0-9][0-9]$ ]]
+}
+
+# Download a URL to a path with retry + resume.
+# Usage: dtm_download <url> <output_path>
+dtm_download() {
+    local url="$1"
+    local out="$2"
+    curl -L --fail --progress-bar \
+        --retry 3 --retry-delay 2 --retry-connrefused \
+        --continue-at - \
+        -o "$out" "$url"
+}
+
+# Acquire an exclusive lock for an install directory. Caller must call
+# dtm_release_lock with the same path on success or failure.
+# Usage: dtm_acquire_lock <lock_path>
+dtm_acquire_lock() {
+    local lock_path="$1"
+    mkdir -p "$(dirname "$lock_path")"
+    if command -v flock >/dev/null 2>&1; then
+        exec 9>"$lock_path"
+        if ! flock -n 9; then
+            log_error "Another dtm process holds the lock: $lock_path"
+            return 1
+        fi
+        return 0
+    fi
+    # Fallback: mkdir-based lock
+    local tries=0
+    while ! mkdir "$lock_path" 2>/dev/null; do
+        tries=$((tries + 1))
+        if (( tries > 60 )); then
+            log_error "Could not acquire lock after 60s: $lock_path"
+            return 1
+        fi
+        sleep 1
+    done
+    DTM_LOCK_MKDIR="$lock_path"
+    return 0
+}
+
+dtm_release_lock() {
+    local lock_path="$1"
+    if command -v flock >/dev/null 2>&1; then
+        exec 9>&- 2>/dev/null || true
+        rm -f "$lock_path"
+    else
+        rmdir "$lock_path" 2>/dev/null || true
+        unset DTM_LOCK_MKDIR
+    fi
+}
+
+# Remove all dtm-managed PATH/export lines from .dtmrc that reference a given
+# variable name (e.g. JAVA_HOME, MAVEN_HOME, GRADLE_HOME, GOROOT, GOPATH).
+# Matches both unexpanded ${VAR} and bare $VAR forms, plus historical
+# substring-based lines (e.g. lines literally containing "/java/" in the path).
+# Usage: dtm_clean_dtmrc_for <var_name> [extra_substring ...]
+dtm_clean_dtmrc_for() {
+    local var="$1"; shift
+    [[ -f "$DTM_CONFIG" ]] || return 0
+
+    dtm_sed_i "/^export ${var}=/d" "$DTM_CONFIG"
+    dtm_sed_i "/^export PATH=.*\\\${${var}}/d" "$DTM_CONFIG"
+    dtm_sed_i "/^export PATH=.*\$${var}[^A-Z_]/d" "$DTM_CONFIG"
+
+    local extra
+    for extra in "$@"; do
+        # Use | as delimiter so paths containing / don't break the regex.
+        dtm_sed_i "\|^export PATH=.*${extra}|d" "$DTM_CONFIG"
+    done
+}
+
+# Check required external dependencies. Fails early with a helpful message.
+dtm_check_deps() {
+    local missing=()
+    command -v curl >/dev/null 2>&1 || missing+=("curl")
+    command -v jq   >/dev/null 2>&1 || missing+=("jq")
+    command -v tar  >/dev/null 2>&1 || missing+=("tar")
+    if (( ${#missing[@]} > 0 )); then
+        log_error "Missing required dependencies: ${missing[*]}"
+        log_info "Install them via your package manager and retry."
+        exit 1
+    fi
+}
+
 # Verify a file's checksum.
 # Usage: verify_checksum <file> <expected_hash> [algo]
 # algo: sha256 (default) or sha512
@@ -287,6 +388,8 @@ main() {
                 log_error "Version is required for pull command"
                 exit 1
             fi
+
+            dtm_check_deps
 
             case "$tool" in
                 java) pull_java "$version" ;;

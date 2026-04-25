@@ -7,32 +7,31 @@ MAVEN_ROOT="${DTM_ROOT}/maven"
 # Get the latest Maven version from Apache
 get_latest_maven_version() {
     log_info "Fetching latest Maven version..." >&2
-    
-    # Query Maven metadata for latest version
+
     local metadata_url="https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/maven-metadata.xml"
-    local version=$(curl -s "$metadata_url" | grep -o '<latest>[^<]*</latest>' | sed 's/<[^>]*>//g')
-    
+    local version
+    version=$(curl -fsSL --retry 3 --retry-delay 2 "$metadata_url" 2>/dev/null \
+        | grep -o '<latest>[^<]*</latest>' | sed 's/<[^>]*>//g')
+
     if [[ -z "$version" ]]; then
         log_error "Could not fetch latest Maven version" >&2
         return 1
     fi
-    
+
     echo "$version"
 }
 
 # Build download URL for Maven
 get_maven_download_url() {
     local version="$1"
-    
-    # Maven download URL pattern
+
     local download_url="https://archive.apache.org/dist/maven/maven-3/${version}/binaries/apache-maven-${version}-bin.tar.gz"
-    
-    # Verify URL exists
-    if ! curl -sI "$download_url" | grep -q "200 OK"; then
+
+    if ! dtm_url_exists "$download_url"; then
         log_error "Could not find download URL for Maven $version" >&2
         return 1
     fi
-    
+
     echo "$download_url"
 }
 
@@ -40,50 +39,48 @@ get_maven_download_url() {
 pull_maven() {
     local version="$1"
     local exact_version=""
-    
-    # Check if version is "latest" or a specific version
+
     if [[ "$version" == "latest" ]]; then
-        exact_version=$(get_latest_maven_version)
-        if [[ $? -ne 0 ]]; then
+        exact_version=$(get_latest_maven_version) || {
             log_error "Failed to get latest Maven version"
             exit 1
-        fi
+        }
         log_info "Latest version found: $exact_version"
     else
         exact_version="$version"
     fi
-    
-    # Create Maven directory if it doesn't exist
+
     mkdir -p "$MAVEN_ROOT"
-    
-    # Determine installation directory
+
     local install_dir="${MAVEN_ROOT}/${exact_version}"
-    
+    local lock_path="${install_dir}.lock"
+
+    dtm_acquire_lock "$lock_path" || exit 1
+    trap 'dtm_release_lock "'"$lock_path"'"' EXIT INT TERM
+
     if [[ -d "$install_dir" ]]; then
         log_warn "Maven $exact_version is already installed at $install_dir"
         read -p "Do you want to reinstall? (y/N): " -n 1 -r
         echo
         if [[ ! $REPLY =~ ^[Yy]$ ]]; then
             log_info "Installation cancelled"
+            dtm_release_lock "$lock_path"
+            trap - EXIT INT TERM
             return 0
         fi
         rm -rf "$install_dir"
     fi
-    
-    # Get download URL
-    local download_url=$(get_maven_download_url "$exact_version")
-    if [[ $? -ne 0 ]]; then
-        exit 1
-    fi
-    
+
+    local download_url
+    download_url=$(get_maven_download_url "$exact_version") || exit 1
+
     log_info "Downloading Maven from: $download_url"
-    
-    # Create temp directory for download
-    local temp_dir=$(mktemp -d)
+
+    local temp_dir
+    temp_dir=$(mktemp -d)
     local download_file="${temp_dir}/maven.tar.gz"
-    
-    # Download with progress
-    if ! curl -L --progress-bar -o "$download_file" "$download_url"; then
+
+    if ! dtm_download "$download_url" "$download_file"; then
         log_error "Download failed"
         rm -rf "$temp_dir"
         exit 1
@@ -105,20 +102,18 @@ pull_maven() {
     fi
 
     log_info "Extracting Maven to $install_dir..."
-    
-    # Extract tarball
     mkdir -p "$install_dir"
-    tar -xzf "$download_file" -C "$install_dir" --strip-components=1
-    
-    if [[ $? -ne 0 ]]; then
+    if ! tar -xzf "$download_file" -C "$install_dir" --strip-components=1; then
         log_error "Extraction failed"
         rm -rf "$temp_dir" "$install_dir"
         exit 1
     fi
-    
-    # Cleanup
+
     rm -rf "$temp_dir"
-    
+
+    dtm_release_lock "$lock_path"
+    trap - EXIT INT TERM
+
     log_success "Maven $exact_version installed successfully to $install_dir"
     log_info "Run 'dtm set maven $exact_version' to activate this version"
 }
@@ -130,13 +125,12 @@ set_maven() {
     # Find matching installation
     local install_dir=""
     
-    # Check if exact version exists
     if [[ -d "${MAVEN_ROOT}/${version}" ]]; then
         install_dir="${MAVEN_ROOT}/${version}"
     else
-        # Try to find latest version matching the pattern
-        local matching_dirs=$(find "$MAVEN_ROOT" -maxdepth 1 -type d -name "${version}*" 2>/dev/null | sort -V | tail -1)
-        
+        local matching_dirs
+        matching_dirs=$(find "$MAVEN_ROOT" -maxdepth 1 -type d -name "${version}*" 2>/dev/null | sort -V | tail -1)
+
         if [[ -n "$matching_dirs" ]]; then
             install_dir="$matching_dirs"
         else
@@ -146,18 +140,13 @@ set_maven() {
             exit 1
         fi
     fi
-    
-    log_info "Setting Maven to $(basename $install_dir)..." >&2
-    
-    # Update .dtmrc configuration file
-    mkdir -p "$(dirname $DTM_CONFIG)"
-    
-    # Remove old Maven configuration
-    if [[ -f "$DTM_CONFIG" ]]; then
-        sed -i '/^export MAVEN_HOME=/d' "$DTM_CONFIG"
-        sed -i '/^export M2_HOME=/d' "$DTM_CONFIG"
-        sed -i '/^export PATH=.*maven.*bin/d' "$DTM_CONFIG"
-    fi
+
+    log_info "Setting Maven to $(basename "$install_dir")..." >&2
+
+    mkdir -p "$(dirname "$DTM_CONFIG")"
+
+    dtm_clean_dtmrc_for "MAVEN_HOME" "/maven/.*/bin"
+    dtm_clean_dtmrc_for "M2_HOME"
     
     # Add new Maven configuration
     cat >> "$DTM_CONFIG" << EOF
@@ -166,7 +155,7 @@ export M2_HOME="${install_dir}"
 export PATH="\${MAVEN_HOME}/bin:\${PATH}"
 EOF
     
-    log_success "Maven $(basename $install_dir) activated" >&2
+    log_success "Maven $(basename "$install_dir") activated" >&2
     
     # Show current Maven version
     if [[ -f "${install_dir}/bin/mvn" ]]; then

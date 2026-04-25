@@ -7,20 +7,25 @@ JAVA_ROOT="${DTM_ROOT}/java"
 # Get the latest patch version for a major version from Temurin API
 get_latest_java_version() {
     local major_version="$1"
-    
+
     log_info "Fetching latest Java $major_version version from Temurin..." >&2
-    
-    # Query Temurin API for available releases (filter for JDK image type)
+
     local api_url="https://api.adoptium.net/v3/assets/latest/${major_version}/hotspot?image_type=jdk"
-    
-    # Use Python for reliable JSON parsing
-    local version=$(curl -s "$api_url" | python3 -c "import sys, json; data = json.load(sys.stdin); print(data[0]['version']['semver'].split('+')[0])" 2>/dev/null)
-    
-    if [[ -z "$version" ]]; then
-        log_error "Could not fetch or parse version from Temurin API" >&2
+
+    local response
+    response=$(curl -fsSL --retry 3 --retry-delay 2 "$api_url" 2>/dev/null) || {
+        log_error "Failed to query Temurin API: $api_url" >&2
+        return 1
+    }
+
+    local version
+    version=$(echo "$response" | jq -r '.[0].version.semver | split("+")[0]' 2>/dev/null)
+
+    if [[ -z "$version" || "$version" == "null" ]]; then
+        log_error "Could not parse version from Temurin API" >&2
         return 1
     fi
-    
+
     echo "$version"
 }
 
@@ -28,35 +33,28 @@ get_latest_java_version() {
 # Outputs two lines: download_url, sha256 checksum
 get_java_download_info() {
     local version="$1"
-    local major_version=$(echo "$version" | cut -d'.' -f1)
+    local major_version
+    major_version=$(echo "$version" | cut -d'.' -f1)
 
-    # Determine OS suffix
     local os_suffix
     case "$OS" in
         linux) os_suffix="linux" ;;
         mac) os_suffix="mac" ;;
     esac
 
-    # Build API query URL - try specific version first
     local api_url="https://api.adoptium.net/v3/assets/version/jdk-${version}"
-    local response=$(curl -s "${api_url}?architecture=${ARCH}&image_type=jdk&os=${os_suffix}")
+    local response
+    response=$(curl -fsSL --retry 3 --retry-delay 2 "${api_url}?architecture=${ARCH}&image_type=jdk&os=${os_suffix}" 2>/dev/null || true)
 
     if [[ -z "$response" || "$response" == "[]" ]]; then
-        # Try with latest for major version
         api_url="https://api.adoptium.net/v3/assets/latest/${major_version}/hotspot"
-        response=$(curl -s "${api_url}?architecture=${ARCH}&image_type=jdk&os=${os_suffix}")
+        response=$(curl -fsSL --retry 3 --retry-delay 2 "${api_url}?architecture=${ARCH}&image_type=jdk&os=${os_suffix}" 2>/dev/null || true)
     fi
 
-    # Extract download URL and checksum using Python
-    local info=$(echo "$response" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-pkg = data[0]['binary']['package']
-print(pkg['link'])
-print(pkg['checksum'])
-" 2>/dev/null)
+    local info
+    info=$(echo "$response" | jq -r '.[0].binary.package | .link, .checksum' 2>/dev/null)
 
-    if [[ -z "$info" ]]; then
+    if [[ -z "$info" || "$info" == *"null"* ]]; then
         log_error "Could not find download URL/checksum for Java $version (OS: $os_suffix, ARCH: $ARCH)" >&2
         return 1
     fi
@@ -68,54 +66,53 @@ print(pkg['checksum'])
 pull_java() {
     local version="$1"
     local exact_version=""
-    
-    # Check if version is just major version (e.g., "11") or full version (e.g., "11.0.21")
+
     if [[ "$version" =~ ^[0-9]+$ ]]; then
         log_info "Version $version is a major version, fetching latest patch version..."
-        exact_version=$(get_latest_java_version "$version")
-        if [[ $? -ne 0 ]]; then
+        exact_version=$(get_latest_java_version "$version") || {
             log_error "Failed to get latest version for Java $version"
             exit 1
-        fi
+        }
         log_info "Latest version found: $exact_version"
     else
         exact_version="$version"
     fi
-    
-    # Create Java directory if it doesn't exist
+
     mkdir -p "$JAVA_ROOT"
-    
-    # Determine installation directory
+
     local install_dir="${JAVA_ROOT}/${exact_version}"
-    
+    local lock_path="${install_dir}.lock"
+
+    dtm_acquire_lock "$lock_path" || exit 1
+    trap 'dtm_release_lock "'"$lock_path"'"' EXIT INT TERM
+
     if [[ -d "$install_dir" ]]; then
         log_warn "Java $exact_version is already installed at $install_dir"
         read -p "Do you want to reinstall? (y/N): " -n 1 -r
         echo
         if [[ ! $REPLY =~ ^[Yy]$ ]]; then
             log_info "Installation cancelled"
+            dtm_release_lock "$lock_path"
+            trap - EXIT INT TERM
             return 0
         fi
         rm -rf "$install_dir"
     fi
-    
-    # Get download URL and checksum
+
     local download_info
-    download_info=$(get_java_download_info "$exact_version")
-    if [[ $? -ne 0 ]]; then
-        exit 1
-    fi
-    local download_url=$(echo "$download_info" | sed -n '1p')
-    local expected_checksum=$(echo "$download_info" | sed -n '2p')
+    download_info=$(get_java_download_info "$exact_version") || exit 1
+
+    local download_url expected_checksum
+    download_url=$(echo "$download_info" | sed -n '1p')
+    expected_checksum=$(echo "$download_info" | sed -n '2p')
 
     log_info "Downloading JDK from: $download_url"
 
-    # Create temp directory for download
-    local temp_dir=$(mktemp -d)
+    local temp_dir
+    temp_dir=$(mktemp -d)
     local download_file="${temp_dir}/jdk.tar.gz"
 
-    # Download with progress
-    if ! curl -L --progress-bar -o "$download_file" "$download_url"; then
+    if ! dtm_download "$download_url" "$download_file"; then
         log_error "Download failed"
         rm -rf "$temp_dir"
         exit 1
@@ -128,20 +125,18 @@ pull_java() {
     fi
 
     log_info "Extracting JDK to $install_dir..."
-    
-    # Extract tarball
     mkdir -p "$install_dir"
-    tar -xzf "$download_file" -C "$install_dir" --strip-components=1
-    
-    if [[ $? -ne 0 ]]; then
+    if ! tar -xzf "$download_file" -C "$install_dir" --strip-components=1; then
         log_error "Extraction failed"
         rm -rf "$temp_dir" "$install_dir"
         exit 1
     fi
-    
-    # Cleanup
+
     rm -rf "$temp_dir"
-    
+
+    dtm_release_lock "$lock_path"
+    trap - EXIT INT TERM
+
     log_success "Java $exact_version installed successfully to $install_dir"
     log_info "Run 'dtm set java $exact_version' to activate this version"
 }
@@ -153,14 +148,13 @@ set_java() {
     # Find matching installation
     local install_dir=""
     
-    # Check if exact version exists
     if [[ -d "${JAVA_ROOT}/${version}" ]]; then
         install_dir="${JAVA_ROOT}/${version}"
     else
-        # Try to find latest version matching the major version
-        local major_version=$(echo "$version" | cut -d'.' -f1)
-        local matching_dirs=$(find "$JAVA_ROOT" -maxdepth 1 -type d -name "${major_version}.*" 2>/dev/null | sort -V | tail -1)
-        
+        local major_version matching_dirs
+        major_version=$(echo "$version" | cut -d'.' -f1)
+        matching_dirs=$(find "$JAVA_ROOT" -maxdepth 1 -type d -name "${major_version}.*" 2>/dev/null | sort -V | tail -1)
+
         if [[ -n "$matching_dirs" ]]; then
             install_dir="$matching_dirs"
         else
@@ -170,17 +164,12 @@ set_java() {
             exit 1
         fi
     fi
-    
-    log_info "Setting Java to $(basename $install_dir)..." >&2
-    
-    # Update .dtmrc configuration file
-    mkdir -p "$(dirname $DTM_CONFIG)"
-    
-    # Remove old Java configuration
-    if [[ -f "$DTM_CONFIG" ]]; then
-        sed -i '/^export JAVA_HOME=/d' "$DTM_CONFIG"
-        sed -i '/^export PATH=.*java.*bin/d' "$DTM_CONFIG"
-    fi
+
+    log_info "Setting Java to $(basename "$install_dir")..." >&2
+
+    mkdir -p "$(dirname "$DTM_CONFIG")"
+
+    dtm_clean_dtmrc_for "JAVA_HOME" "/java/.*/bin"
     
     # Add new Java configuration
     cat >> "$DTM_CONFIG" << EOF
@@ -188,7 +177,7 @@ export JAVA_HOME="${install_dir}"
 export PATH="\${JAVA_HOME}/bin:\${PATH}"
 EOF
     
-    log_success "Java $(basename $install_dir) activated" >&2
+    log_success "Java $(basename "$install_dir") activated" >&2
     
     # Show current Java version from the new installation
     if [[ -f "${install_dir}/bin/java" ]]; then
