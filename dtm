@@ -967,13 +967,16 @@ config_command() {
                 # Expand ~ to home directory
                 new_path="${new_path/#\~/$HOME}"
 
-                # Convert to absolute path
-                new_path=$(realpath -m "$new_path")
+                # Make absolute relative to CWD if needed
+                [[ "$new_path" = /* ]] || new_path="$PWD/$new_path"
+
+                # Create the directory if it doesn't exist (must exist for canonicalization)
+                mkdir -p "$new_path"
+
+                # Canonicalize portably (resolves .., ., symlinks without GNU realpath -m)
+                new_path=$(cd "$new_path" && pwd -P)
 
                 log_info "Setting DTM_HOME to: $new_path"
-
-                # Create the directory if it doesn't exist
-                mkdir -p "$new_path"
 
                 # Save to settings file
                 echo "# DevTool Manager Configuration" > "$DTM_SETTINGS"
