@@ -37,11 +37,55 @@ Run `dtm tools` for the live list (always reflects shipped + user descriptors).
 
 ## Installation
 
-1. Clone or download this repository
+### Quick install (curl)
+
+Requires `git` (used both for the initial clone and for `dtm self-update`).
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/HeshanSudarshana/devtool-manager/main/bootstrap.sh | bash
+```
+
+To skip prompts (CI / unattended):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/HeshanSudarshana/devtool-manager/main/bootstrap.sh | bash -s -- --yes
+```
+
+The bootstrap script clones the repository to `~/.local/share/devtool-manager`
+and then runs `install.sh` from there. The clone directory must persist —
+`dtm` is symlinked from it and `dtm self-update` does a `git pull` against it.
+
+Overrides:
+
+| Variable      | Default                                                            | Purpose                              |
+| ------------- | ------------------------------------------------------------------ | ------------------------------------ |
+| `DTM_REPO`    | `https://github.com/HeshanSudarshana/devtool-manager.git`          | Source git URL                       |
+| `DTM_REF`     | `main`                                                             | Branch, tag, or commit to check out  |
+| `DTM_SRC_DIR` | `~/.local/share/devtool-manager`                                   | Where to clone the source tree       |
+
+Pin to a specific commit for reproducible installs:
+
+```bash
+DTM_REF=<commit-sha> curl -fsSL https://raw.githubusercontent.com/HeshanSudarshana/devtool-manager/main/bootstrap.sh | bash
+```
+
+If you would rather review the script before executing it (recommended for any
+`curl | bash` pattern), download it first:
+
+```bash
+curl -fsSLo bootstrap.sh https://raw.githubusercontent.com/HeshanSudarshana/devtool-manager/main/bootstrap.sh
+less bootstrap.sh
+bash bootstrap.sh
+```
+
+### Manual install (clone)
+
+1. Clone this repository
 2. Run the installation script:
 
 ```bash
-cd /home/heshan/development/devtools/devtool-manager
+git clone https://github.com/HeshanSudarshana/devtool-manager.git
+cd devtool-manager
 ./install.sh
 ```
 
@@ -50,7 +94,9 @@ The installer will:
 - ✅ Set up auto-apply wrapper (dtm.sh) in your shell config
 - ✅ Install shell completion (bash / zsh / fish)
 
-3. **Restart your shell or run:**
+### Post-install
+
+**Restart your shell or run:**
 
 ```bash
 source ~/.bashrc  # or source ~/.zshrc
