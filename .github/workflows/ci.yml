@@ -32,3 +32,28 @@ jobs:
         run: brew install bats-core jq bash
       - name: Run bats
         run: bats tests/
+
+  bash32-smoke:
+    # Lock in bash 3.2 compatibility — Apple still ships /bin/bash 3.2 on
+    # macOS and that's what dtm runs under via `#!/usr/bin/env bash` when
+    # the user has no homebrew bash on PATH.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install jq
+        run: brew install jq
+      - name: Verify /bin/bash is 3.2
+        run: /bin/bash --version | head -1
+      - name: Syntax check under /bin/bash
+        run: |
+          /bin/bash -n dtm
+          /bin/bash -n dtm.sh
+          /bin/bash -n install.sh
+          /bin/bash -n bootstrap.sh
+          for f in modules/*.sh; do /bin/bash -n "$f"; done
+      - name: Smoke test under /bin/bash
+        env:
+          PATH: /usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin
+        run: |
+          /bin/bash ./dtm tools
+          /bin/bash ./dtm doctor || true

@@ -44,8 +44,45 @@
 #   workspace_bin           Subdir of the workspace to prepend after bin_subdir on PATH (e.g. bin).
 #   workspace_init          Comma-separated subdirs to create on pull (e.g. "src,pkg,bin").
 
-# Registry of discovered descriptor files: name -> absolute path.
-declare -gA DTM_CANDIDATE_FILES
+# Registry of discovered descriptor files: parallel indexed arrays of
+# names and absolute paths. Bash 3.2 has no associative arrays, so lookups
+# are linear scans. Candidate count is small (~dozen), so O(n) is fine.
+DTM_CANDIDATE_NAMES=()
+DTM_CANDIDATE_PATHS=()
+
+# Set or update the descriptor path for a candidate name.
+dtm_cand_set() {
+    local name="$1" path="$2" i
+    for (( i=0; i < ${#DTM_CANDIDATE_NAMES[@]}; i++ )); do
+        if [[ "${DTM_CANDIDATE_NAMES[$i]}" == "$name" ]]; then
+            DTM_CANDIDATE_PATHS[$i]="$path"
+            return 0
+        fi
+    done
+    DTM_CANDIDATE_NAMES+=("$name")
+    DTM_CANDIDATE_PATHS+=("$path")
+}
+
+# Echo the descriptor path for a candidate name. Returns non-zero if absent.
+dtm_cand_get() {
+    local name="$1" i
+    for (( i=0; i < ${#DTM_CANDIDATE_NAMES[@]}; i++ )); do
+        if [[ "${DTM_CANDIDATE_NAMES[$i]}" == "$name" ]]; then
+            echo "${DTM_CANDIDATE_PATHS[$i]}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Test whether a candidate name is registered. Silent.
+dtm_cand_has() {
+    local name="$1" i
+    for (( i=0; i < ${#DTM_CANDIDATE_NAMES[@]}; i++ )); do
+        [[ "${DTM_CANDIDATE_NAMES[$i]}" == "$name" ]] && return 0
+    done
+    return 1
+}
 
 # Reset all candidate_* variables to defaults so a new load doesn't inherit
 # leftover state from a prior load in the same process.
@@ -87,7 +124,8 @@ candidate_reset() {
 # Load a descriptor file. Sets candidate_* variables.
 candidate_load() {
     local name="$1"
-    local file="${DTM_CANDIDATE_FILES[$name]:-}"
+    local file
+    file=$(dtm_cand_get "$name") || file=""
     if [[ -z "$file" || ! -f "$file" ]]; then
         log_error "No descriptor for candidate: $name"
         return 1

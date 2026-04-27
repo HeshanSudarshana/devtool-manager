@@ -762,8 +762,8 @@ shellcheck dtm dtm.sh install.sh modules/*.sh
 ```
 
 CI runs both on every push (`.github/workflows/ci.yml`) on Linux and macOS.
-dtm requires bash 4+ (uses `declare -gA`); the macOS-default bash 3.2 is not
-supported.
+dtm runs on bash 3.2+, so the macOS-default `/bin/bash` works without
+homebrew bash.
 
 ## License
 

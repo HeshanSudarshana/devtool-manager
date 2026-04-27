@@ -466,13 +466,13 @@ source_modules() {
         for cf in "${script_dir}/modules/candidates"/*.conf; do
             [[ -f "$cf" ]] || continue
             cname="$(basename "$cf" .conf)"
-            DTM_CANDIDATE_FILES["$cname"]="$cf"
+            dtm_cand_set "$cname" "$cf"
         done
         if [[ -d "$DTM_USER_CANDIDATES" ]]; then
             for cf in "$DTM_USER_CANDIDATES"/*.conf; do
                 [[ -f "$cf" ]] || continue
                 cname="$(basename "$cf" .conf)"
-                DTM_CANDIDATE_FILES["$cname"]="$cf"
+                dtm_cand_set "$cname" "$cf"
             done
         fi
     fi
@@ -556,7 +556,7 @@ doctor_command() {
         "python|PYTHON_HOME|${DTM_ROOT}/python|bin/python3"
     )
     local _cname
-    for _cname in "${!DTM_CANDIDATE_FILES[@]}"; do
+    for _cname in "${DTM_CANDIDATE_NAMES[@]}"; do
         candidate_load "$_cname" || continue
         tool_descs+=("${_cname}|${candidate_home_var}|${DTM_ROOT}/${_cname}|${candidate_binary_check}")
     done
@@ -659,19 +659,22 @@ doctor_command() {
     log_info "[orphans] checking top-level entries under $DTM_ROOT..."
     # Build the known-entries set: legacy modules + every registered candidate
     # name + any workspace_subdir declared by a candidate.
-    local -A known_set=([java]=1 [node]=1 [python]=1)
-    for _cname in "${!DTM_CANDIDATE_FILES[@]}"; do
-        known_set["$_cname"]=1
+    # Bash 3.2 has no associative arrays — encode the known-name set as a
+    # colon-delimited string and probe it with a glob match.
+    local known_set=":java:node:python:"
+    local _cname
+    for _cname in "${DTM_CANDIDATE_NAMES[@]}"; do
+        known_set="${known_set}${_cname}:"
         candidate_load "$_cname" || continue
         if [[ -n "$candidate_workspace_subdir" ]]; then
-            known_set["$candidate_workspace_subdir"]=1
+            known_set="${known_set}${candidate_workspace_subdir}:"
         fi
     done
     local orphans=() entry name
     for entry in "$DTM_ROOT"/*; do
         [[ -e "$entry" ]] || continue
         name=$(basename "$entry")
-        if [[ -z "${known_set[$name]:-}" ]]; then
+        if [[ "$known_set" != *":${name}:"* ]]; then
             orphans+=("$entry")
         fi
     done
@@ -765,18 +768,22 @@ doctor_command() {
         log_info "  no proxy configured (HTTPS_PROXY/HTTP_PROXY unset)"
     fi
 
-    local -A _mirror_defaults=(
-        [DTM_TEMURIN_API]="https://api.adoptium.net/v3"
-        [DTM_MAVEN_REPO]="https://repo.maven.apache.org/maven2"
-        [DTM_MAVEN_DIST]="https://archive.apache.org/dist/maven"
-        [DTM_GRADLE_DIST]="https://services.gradle.org"
-        [DTM_GO_DIST]="https://go.dev"
-        [DTM_GO_CHECKSUM]="https://dl.google.com/go"
-        [DTM_NODE_DIST]="https://nodejs.org/dist"
-        [DTM_PBS_REPO]="https://api.github.com/repos/astral-sh/python-build-standalone"
-        [DTM_PBS_DIST]="https://github.com/astral-sh/python-build-standalone/releases/download"
-        [DTM_PBS_LATEST]="https://raw.githubusercontent.com/astral-sh/python-build-standalone/latest-release/latest-release.json"
-    )
+    # Bash 3.2 has no associative arrays — keep mirror defaults in a case
+    # statement and walk an ordered name list.
+    _mirror_default_for() {
+        case "$1" in
+            DTM_TEMURIN_API) echo "https://api.adoptium.net/v3" ;;
+            DTM_MAVEN_REPO)  echo "https://repo.maven.apache.org/maven2" ;;
+            DTM_MAVEN_DIST)  echo "https://archive.apache.org/dist/maven" ;;
+            DTM_GRADLE_DIST) echo "https://services.gradle.org" ;;
+            DTM_GO_DIST)     echo "https://go.dev" ;;
+            DTM_GO_CHECKSUM) echo "https://dl.google.com/go" ;;
+            DTM_NODE_DIST)   echo "https://nodejs.org/dist" ;;
+            DTM_PBS_REPO)    echo "https://api.github.com/repos/astral-sh/python-build-standalone" ;;
+            DTM_PBS_DIST)    echo "https://github.com/astral-sh/python-build-standalone/releases/download" ;;
+            DTM_PBS_LATEST)  echo "https://raw.githubusercontent.com/astral-sh/python-build-standalone/latest-release/latest-release.json" ;;
+        esac
+    }
     local -a _mirror_order=(DTM_TEMURIN_API DTM_MAVEN_REPO DTM_MAVEN_DIST \
                             DTM_GRADLE_DIST DTM_GO_DIST DTM_GO_CHECKSUM \
                             DTM_NODE_DIST DTM_PBS_REPO DTM_PBS_DIST \
@@ -784,7 +791,7 @@ doctor_command() {
     local mvar mval mdef
     for mvar in "${_mirror_order[@]}"; do
         mval="${!mvar}"
-        mdef="${_mirror_defaults[$mvar]}"
+        mdef=$(_mirror_default_for "$mvar")
         if [[ "$mval" != "$mdef" ]]; then
             log_info "  $mvar=$mval (overridden)"
         else
@@ -808,7 +815,7 @@ doctor_command() {
         local mirrors_json="{}"
         for mvar in "${_mirror_order[@]}"; do
             mval="${!mvar}"
-            mdef="${_mirror_defaults[$mvar]}"
+            mdef=$(_mirror_default_for "$mvar")
             mirrors_json=$(jq -c \
                 --arg k "$mvar" \
                 --arg url "$mval" \
@@ -1103,7 +1110,7 @@ main() {
             echo node
             echo python
             local _t
-            for _t in "${!DTM_CANDIDATE_FILES[@]}"; do echo "$_t"; done
+            for _t in "${DTM_CANDIDATE_NAMES[@]}"; do echo "$_t"; done
         } | sort -u
         exit 0
     fi
@@ -1140,7 +1147,7 @@ main() {
     # Candidate-engine fallthrough: any tool registered via modules/candidates/*.conf
     # is handled generically. Legacy java/maven/gradle/go/node/python keep their
     # dedicated modules below.
-    if [[ -n "${DTM_CANDIDATE_FILES[$tool]:-}" ]]; then
+    if dtm_cand_has "$tool"; then
         candidate_dispatch "$command" "$tool" "$version"
         exit 0
     fi
