@@ -13,47 +13,50 @@ jobs:
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Run shellcheck
-        run: |
-          shellcheck dtm dtm.sh install.sh modules/*.sh
+        run: shellcheck dtm dtm.sh install.sh bootstrap.sh modules/*.sh
 
-  bats:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+  bats-linux:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install bats + jq (Linux)
-        if: runner.os == 'Linux'
+      - name: Install bats + jq
         run: sudo apt-get update && sudo apt-get install -y bats jq
-      - name: Install bats + jq + bash (macOS)
-        if: runner.os == 'macOS'
-        run: brew install bats-core jq bash
+      - name: Print bash version
+        run: bash --version | head -1
       - name: Run bats
         run: bats tests/
 
-  bash32-smoke:
-    # Lock in bash 3.2 compatibility — Apple still ships /bin/bash 3.2 on
-    # macOS and that's what dtm runs under via `#!/usr/bin/env bash` when
-    # the user has no homebrew bash on PATH.
+  bats-macos-bash32:
+    # Run the test suite under macOS /bin/bash 3.2 — not homebrew bash 5.x.
+    # bats-core works on bash 3.2.25+. We install bats-core but NOT bash,
+    # then PATH-prefix /usr/bin:/bin so every `#!/usr/bin/env bash` (bats
+    # wrapper, dtm, dtm.sh) resolves to /bin/bash. /opt/homebrew/bin stays
+    # last so jq + the bats binary remain reachable. Running bats under brew
+    # bash would silently mask 3.2 regressions; this is the only macOS bats
+    # job, by design.
     runs-on: macos-latest
+    env:
+      # /usr/bin has no `bash` on macOS, so /usr/bin/env bash falls through
+      # to /bin/bash (3.2). brew bin trails so it can't shadow it.
+      PATH: /usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin
     steps:
       - uses: actions/checkout@v4
-      - name: Install jq
-        run: brew install jq
-      - name: Verify /bin/bash is 3.2
-        run: /bin/bash --version | head -1
-      - name: Syntax check under /bin/bash
+      - name: Install bats-core + jq (no bash)
+        run: brew install bats-core jq
+      - name: Verify /usr/bin/env bash resolves to 3.2
         run: |
-          /bin/bash -n dtm
-          /bin/bash -n dtm.sh
+          /usr/bin/env bash --version | head -1
+          /usr/bin/env bash -c '[[ "${BASH_VERSION%%.*}" == "3" ]] || { echo "expected bash 3, got $BASH_VERSION"; exit 1; }'
+      - name: Parse install.sh + bootstrap.sh under /bin/bash
+        # bats + dtm-smoke transitively cover dtm/dtm.sh/modules/*.sh and
+        # every candidates/*.conf (doctor sources each via candidate_load),
+        # but never invoke install.sh or bootstrap.sh — parse them explicitly.
+        run: |
           /bin/bash -n install.sh
           /bin/bash -n bootstrap.sh
-          for f in modules/*.sh; do /bin/bash -n "$f"; done
-      - name: Smoke test under /bin/bash
-        env:
-          PATH: /usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin
+      - name: Run bats
+        run: bats tests/
+      - name: Smoke run dtm
         run: |
-          /bin/bash ./dtm tools
-          /bin/bash ./dtm doctor || true
+          ./dtm tools
+          ./dtm doctor || true
