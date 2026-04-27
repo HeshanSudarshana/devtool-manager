@@ -31,7 +31,7 @@ Additional tools shipped via the [candidate descriptor model](#candidates-descri
 - **Terraform** - HashiCorp Terraform from releases.hashicorp.com (sha256)
 - **kubectl** - Kubernetes CLI from dl.k8s.io (sha256)
 - **Helm** - Kubernetes package manager from get.helm.sh (sha256)
-- **Docker** - Docker engine static binaries from download.docker.com (no sidecar checksum)
+- **Docker CLI** (`docker-cli`) - `docker` client only from download.docker.com (no sidecar checksum); requires an external daemon (colima, OrbStack, Docker Desktop, remote `DOCKER_HOST`)
 
 Run `dtm tools` for the live list (always reflects shipped + user descriptors).
 
@@ -574,7 +574,7 @@ caches, Adoptium / Maven / Gradle / Go mirrors) via these env vars:
 | `DTM_PBS_REPO`     | `https://api.github.com/repos/astral-sh/python-build-standalone` | `dtm available python` (release listing) |
 | `DTM_PBS_DIST`     | `https://github.com/astral-sh/python-build-standalone/releases/download` | `dtm pull python` (tarballs + sha256) |
 | `DTM_PBS_LATEST`   | `https://raw.githubusercontent.com/astral-sh/python-build-standalone/latest-release/latest-release.json` | `dtm pull/available python` (resolve latest tag) |
-| `DTM_DOCKER_DIST`  | `https://download.docker.com`              | `dtm pull/available docker` (static tarballs + index) |
+| `DTM_DOCKER_DIST`  | `https://download.docker.com`              | `dtm pull/available docker-cli` (static tarballs + index) |
 | `DTM_USER_CANDIDATES` | `~/.dtm/candidates`                     | dir scanned for user-defined `*.conf` descriptors |
 | `DTM_HASHICORP_MAX_PAGES` | `25`                                | safety cap on `hashicorp_releases` pagination (20 results/page) |
 
