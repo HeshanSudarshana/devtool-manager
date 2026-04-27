@@ -55,7 +55,7 @@ dtm_cand_set() {
     local name="$1" path="$2" i
     for (( i=0; i < ${#DTM_CANDIDATE_NAMES[@]}; i++ )); do
         if [[ "${DTM_CANDIDATE_NAMES[$i]}" == "$name" ]]; then
-            DTM_CANDIDATE_PATHS[$i]="$path"
+            DTM_CANDIDATE_PATHS[i]="$path"
             return 0
         fi
     done
