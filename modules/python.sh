@@ -45,9 +45,36 @@ _python_release_versions() {
         | sort -V -u -r
 }
 
+# Walk older PBS releases for the first version matching a grep filter. Echoes
+# "<exact_version> <release_tag>" and returns 0 on the first hit; returns 1 if
+# none found. Capped at 5 pages of the anonymous GitHub API (rate-limited
+# 60/hr/IP). Releases are newest-first, and per-release versions are sorted
+# descending, so the first hit is the newest matching build.
+#   $1        = latest release tag (skipped, already searched)
+#   $2..      = grep args applied to each release's version list
+_python_walk_older_releases() {
+    local latest_tag="$1"; shift
+    local page tags older_tag found
+    for page in 1 2 3 4 5; do
+        tags=$(curl -fsSL --retry 3 --retry-delay 2 \
+            "${DTM_PBS_REPO}/releases?per_page=20&page=${page}" \
+            2>/dev/null | jq -r '.[].tag_name' 2>/dev/null) || break
+        [[ -z "$tags" ]] && break
+        while IFS= read -r older_tag; do
+            [[ -z "$older_tag" || "$older_tag" == "$latest_tag" ]] && continue
+            found=$(_python_release_versions "$older_tag" | grep "$@" | head -1) || true
+            if [[ -n "$found" ]]; then
+                echo "$found $older_tag"
+                return 0
+            fi
+        done <<< "$tags"
+    done
+    return 1
+}
+
 # Resolve <major[.minor[.patch]]|latest> to "<exact_version> <release_tag>".
-# Searches the latest PBS release first; for explicit patch versions falls
-# back to walking older releases (capped at 5 pages of GitHub API results).
+# Searches the latest PBS release first; if no match there (e.g. an EOL series
+# dropped from the latest release), falls back to walking older releases.
 _python_resolve_version() {
     local input="$1"
     local tag versions match
@@ -68,36 +95,24 @@ _python_resolve_version() {
             match=$(echo "$versions" | head -1)
             ;;
         *)
+            local -a gfilter=()
             if [[ "$input" =~ ^[0-9]+$ ]]; then
-                match=$(echo "$versions" | grep -E "^${input}\\." | head -1)
+                gfilter=(-E "^${input}\\.")
             elif [[ "$input" =~ ^[0-9]+\.[0-9]+$ ]]; then
-                match=$(echo "$versions" | grep -E "^${input//./\\.}\\." | head -1)
+                gfilter=(-E "^${input//./\\.}\\.")
             elif [[ "$input" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-                match=$(echo "$versions" | grep -Fx "$input" | head -1)
-                if [[ -z "$match" ]]; then
-                    # Walk older releases for the exact patch. Anonymous
-                    # GitHub API; rate-limited (60/hr/IP).
-                    local page tags older_tag found
-                    for page in 1 2 3 4 5; do
-                        tags=$(curl -fsSL --retry 3 --retry-delay 2 \
-                            "${DTM_PBS_REPO}/releases?per_page=20&page=${page}" \
-                            2>/dev/null | jq -r '.[].tag_name' 2>/dev/null) || break
-                        [[ -z "$tags" ]] && break
-                        while IFS= read -r older_tag; do
-                            [[ -z "$older_tag" || "$older_tag" == "$tag" ]] && continue
-                            found=$(_python_release_versions "$older_tag" \
-                                | grep -Fx "$input" | head -1) || true
-                            if [[ -n "$found" ]]; then
-                                echo "$found $older_tag"
-                                return 0
-                            fi
-                        done <<< "$tags"
-                    done
-                fi
+                gfilter=(-Fx "$input")
             else
                 log_error "Invalid Python version spec: $input" >&2
                 log_info "Examples: 3, 3.12, 3.12.13, latest" >&2
                 return 1
+            fi
+            match=$(echo "$versions" | grep "${gfilter[@]}" | head -1)
+            if [[ -z "$match" ]]; then
+                # Not in the latest release (e.g. an EOL series). Walk older
+                # releases for the newest matching build.
+                log_info "Python $input not in latest PBS release ($tag); searching older releases..." >&2
+                _python_walk_older_releases "$tag" "${gfilter[@]}" && return 0
             fi
             ;;
     esac
