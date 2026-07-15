@@ -213,31 +213,53 @@ _zulu_arch() {
     esac
 }
 
+# Normalize a legacy Java 8 version string ("1.8.0_382") to Azul's modern
+# form ("8.0.382"). Other inputs pass through unchanged.
+_zulu_normalize_version() {
+    local v="$1"
+    if [[ "$v" =~ ^1\.([0-9]+)\.0_([0-9]+)$ ]]; then
+        echo "${BASH_REMATCH[1]}.0.${BASH_REMATCH[2]}"
+    else
+        echo "$v"
+    fi
+}
+
 # Query Azul; outputs three lines on success: download_url, sha256, java_version
 _zulu_query() {
-    local version_filter="$1"
+    local version_filter
+    version_filter=$(_zulu_normalize_version "$1")
     local os_p arch_p
     os_p=$(_zulu_os)
     arch_p=$(_zulu_arch)
-    local url="https://api.azul.com/metadata/v1/zulu/packages/"
-    url="${url}?os=${os_p}&arch=${arch_p}&archive_type=tar.gz"
-    url="${url}&java_package_type=jdk&javafx_bundled=false&release_status=ga"
-    url="${url}&latest=true&include_fields=sha256_hash"
+    local base="https://api.azul.com/metadata/v1/zulu/packages/"
+    base="${base}?os=${os_p}&arch=${arch_p}&archive_type=tar.gz"
+    base="${base}&java_package_type=jdk&javafx_bundled=false&release_status=ga"
+    base="${base}&include_fields=sha256_hash"
     if [[ -n "$version_filter" ]]; then
-        url="${url}&java_version=${version_filter}"
+        base="${base}&java_version=${version_filter}"
     fi
 
-    local response
-    response=$(curl -fsSL --retry 3 --retry-delay 2 "$url" 2>/dev/null) || {
-        log_error "Failed to query Zulu API" >&2
-        return 1
-    }
+    # Prefer the latest build in a release line, but fall back to any matching
+    # build: latest=true hides older/pinned patches (e.g. 8.0.382) entirely.
+    local response latest
+    for latest in "true" ""; do
+        local url="$base"
+        [[ -n "$latest" ]] && url="${url}&latest=true"
+        response=$(curl -fsSL --retry 3 --retry-delay 2 "$url" 2>/dev/null) || {
+            log_error "Failed to query Zulu API" >&2
+            return 1
+        }
+        # Empty array -> no match for this pass; try the next.
+        if [[ "$(echo "$response" | jq -r 'length')" != "0" ]]; then
+            break
+        fi
+    done
 
     local link sha jv
-    link=$(echo "$response" | jq -r '.[0].download_url')
-    sha=$(echo "$response" | jq -r '.[0].sha256_hash')
-    jv=$(echo "$response" | jq -r '.[0].java_version | join(".")')
-    if [[ -z "$link" || "$link" == "null" || -z "$sha" || "$sha" == "null" ]]; then
+    link=$(echo "$response" | jq -r '.[0].download_url // empty')
+    sha=$(echo "$response" | jq -r '.[0].sha256_hash // empty')
+    jv=$(echo "$response" | jq -r '.[0].java_version // [] | join(".")')
+    if [[ -z "$link" || -z "$sha" ]]; then
         log_error "Zulu: no matching package for filter='${version_filter}', os=${os_p}, arch=${arch_p}" >&2
         return 1
     fi
